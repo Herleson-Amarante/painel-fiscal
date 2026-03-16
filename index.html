@@ -29,15 +29,17 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
 
-        // --- CONFIGURAÇÃO DA PLANILHA ---
-        const SHEET_ID = "2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw";
-        const ORIGINAL_URL = `https://docs.google.com/spreadsheets/d/e/${SHEET_ID}/pub?output=csv`;
+        // --- ATUALIZAÇÃO DA NOVA PLANILHA ENVIADA ---
+        // ID extraído de: https://docs.google.com/spreadsheets/d/1R4LUVmBpnDV3xN09hFvfZf2mO5We29AY/
+        const SHEET_ID = "1R4LUVmBpnDV3xN09hFvfZf2mO5We29AY";
         
-        // Lista expandida de Proxies para evitar o erro "Failed to fetch"
+        // Link de exportação CSV para leitura do sistema
+        const ORIGINAL_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=0`;
+        
+        // Lista de Proxies para garantir que a TV nunca fique sem dados
         const PROXIES = [
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
             (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-            (url) => `https://whateverproxy.herokuapp.com/get?url=${encodeURIComponent(url)}`,
             (url) => `https://thingproxy.freeboard.io/fetch/${url}`
         ];
 
@@ -59,14 +61,15 @@
                     const csvText = await response.text();
                     
                     if (!csvText || !csvText.includes(",")) {
-                        throw new Error('CSV Inválido');
+                        throw new Error('Formato inválido');
                     }
 
                     const rows = csvText.split(/\r?\n/).map(row => row.trim()).filter(row => row.length > 0);
-                    if (rows.length < 2) throw new Error('Sem dados');
+                    if (rows.length < 2) throw new Error('Sem dados ativos');
 
                     const dataRows = rows.slice(1);
                     const parsedData = dataRows.map((line, index) => {
+                        // Regex para lidar com vírgulas dentro de aspas no CSV
                         const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
                         const cleanCols = cols.map(c => c.replace(/^"|"$/g, '').trim());
 
@@ -84,10 +87,9 @@
                     setTaxes(parsedData);
                     setErrorMsg(null);
                 } catch (err) {
-                    console.warn(`Tentativa com Proxy ${proxyIndex} falhou. Rotacionando...`);
-                    // Rotaciona o proxy automaticamente
+                    console.warn(`Proxy ${proxyIndex} falhou. Tentando alternativo...`);
                     setProxyIndex((prev) => (prev + 1) % PROXIES.length);
-                    setErrorMsg("Reconectando ao servidor...");
+                    setErrorMsg("Sincronizando com a nuvem...");
                 } finally {
                     setLoading(false);
                 }
@@ -95,7 +97,7 @@
 
             useEffect(() => {
                 fetchSheetData();
-                const dataTimer = setInterval(fetchSheetData, 60000); // 1 minuto
+                const dataTimer = setInterval(fetchSheetData, 120000); // Atualiza a cada 2 min
                 const clockTimer = setInterval(() => setCurrentTime(new Date()), 1000);
                 return () => { clearInterval(dataTimer); clearInterval(clockTimer); };
             }, [fetchSheetData]);
@@ -105,6 +107,7 @@
                 today.setHours(0,0,0,0);
                 
                 let dateStr = tax.dueDate;
+                // Converte DD/MM/AAAA para AAAA-MM-DD para o JavaScript entender
                 if(dateStr.includes('/')) {
                     const parts = dateStr.split('/');
                     if (parts.length === 3) dateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
@@ -139,7 +142,7 @@
                             </div>
                             <div>
                                 <h1 className="text-5xl font-black text-white uppercase tracking-tighter italic leading-none">GOCASE <span className="text-[#FF4DAD]">TAX</span></h1>
-                                <p className="text-zinc-500 text-xl font-bold tracking-[0.2em] uppercase mt-1">Fiscal Hub 2026</p>
+                                <p className="text-zinc-500 text-xl font-bold tracking-[0.2em] uppercase mt-1">Gestão Tributária 2026</p>
                             </div>
                         </div>
                         <div className="text-right">
@@ -155,22 +158,22 @@
                     <div className="flex-1 flex flex-col gap-8 overflow-hidden">
                         <div className="grid grid-cols-4 gap-6 shrink-0">
                             <Card title="Eficiência" value={`${progress}%`} color="emerald" progress={progress} />
-                            <Card title="Entregues" value={stats.pago} color="emerald" icon="✓" />
-                            <Card title="Vence Hoje" value={stats.hoje} color="yellow" icon="!" pulse={stats.hoje > 0} />
-                            <Card title="Atrasadas" value={stats.atrasado} color="red" icon="⚠" pulse={stats.atrasado > 0} />
+                            <Card title="Concluídos" value={stats.pago} color="emerald" icon="✓" />
+                            <Card title="Vencendo Hoje" value={stats.hoje} color="yellow" icon="!" pulse={stats.hoje > 0} />
+                            <Card title="Em Atraso" value={stats.atrasado} color="red" icon="⚠" pulse={stats.atrasado > 0} />
                         </div>
 
                         <div className="flex-1 bg-zinc-900/10 border border-zinc-800/40 rounded-[2.5rem] overflow-hidden flex flex-col shadow-2xl backdrop-blur-md">
                             <div className="px-10 py-6 border-b border-zinc-800/40 flex justify-between items-center bg-zinc-900/20">
                                 <h2 className="text-2xl font-black text-white uppercase tracking-widest flex items-center gap-4 italic">
-                                    <span className="w-2 h-8 bg-[#FF4DAD] rounded-full"></span> Calendário Fiscal
+                                    <span className="w-2 h-8 bg-[#FF4DAD] rounded-full"></span> Lista de Obrigações
                                 </h2>
                                 {loading ? (
-                                    <div className="text-[#00D4FF] animate-pulse font-black text-lg uppercase italic">Sincronizando...</div>
+                                    <div className="text-[#00D4FF] animate-pulse font-black text-lg uppercase italic">Atualizando Planilha...</div>
                                 ) : errorMsg ? (
                                     <div className="text-zinc-600 font-black text-lg uppercase italic">{errorMsg}</div>
                                 ) : (
-                                    <div className="text-zinc-500 font-bold text-sm uppercase px-4 py-1 bg-zinc-800/30 rounded-lg">Online</div>
+                                    <div className="text-zinc-500 font-bold text-sm uppercase px-4 py-1 bg-zinc-800/30 rounded-lg">Dados em Tempo Real</div>
                                 )}
                             </div>
 
@@ -179,7 +182,7 @@
                                 <div className="col-span-1 text-center">UF</div>
                                 <div className="col-span-2 text-center">Data Limite</div>
                                 <div className="col-span-2 text-center">Status</div>
-                                <div className="col-span-2 text-right">Owner</div>
+                                <div className="col-span-2 text-right">Responsável</div>
                             </div>
 
                             <div className="flex-1 overflow-y-auto px-6 py-4 custom-scrollbar">
@@ -210,8 +213,8 @@
                                         <div className="flex flex-col items-center justify-center py-20">
                                             {!loading && (
                                                 <div className="text-center">
-                                                    <div className="text-[#FF4DAD] text-3xl font-black uppercase italic mb-4 animate-pulse">Conectando ao Banco de Dados...</div>
-                                                    <p className="text-zinc-500 font-bold max-w-md uppercase text-sm tracking-widest">Tentando acesso via Proxy alternativo</p>
+                                                    <div className="text-[#FF4DAD] text-3xl font-black uppercase italic mb-4 animate-pulse">Conectando à Gocase Docs...</div>
+                                                    <p className="text-zinc-500 font-bold max-w-md uppercase text-sm tracking-widest">Sincronizando via rota segura</p>
                                                 </div>
                                             )}
                                         </div>
