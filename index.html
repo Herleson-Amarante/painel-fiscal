@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Agenda Tributária Gocase - 2026</title>
-    <!-- Scripts de Frameworks (React & Tailwind) -->
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -20,19 +19,13 @@
     </style>
 </head>
 <body>
-    <div id="root">
-        <div style="height: 100vh; display: flex; align-items: center; justify-content: center; background: #050505; color: #FF4DAD; font-family: sans-serif; font-weight: bold; font-size: 24px;">
-            CARREGANDO PAINEL GOCASE...
-        </div>
-    </div>
+    <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
 
-        // --- LINK DE PUBLICAÇÃO ATUALIZADO ---
         const FINAL_URL = `https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv`;
         
-        // Proxies de segurança para evitar bloqueios de CORS
         const PROXIES = [
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
             (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
@@ -41,8 +34,8 @@
         function App() {
             const [currentTime, setCurrentTime] = useState(new Date());
             const [taxes, setTaxes] = useState([]);
+            const [meta, setMeta] = useState({ competence: '...', total: 0, efficiency: '0%' });
             const [loading, setLoading] = useState(true);
-            const [errorMsg, setErrorMsg] = useState(null);
             const [proxyIndex, setProxyIndex] = useState(0);
 
             const fetchSheetData = useCallback(async () => {
@@ -50,38 +43,43 @@
                 try {
                     const fetchUrl = PROXIES[proxyIndex](FINAL_URL);
                     const response = await fetch(fetchUrl);
-                    
                     if (!response.ok) throw new Error('Falha na rede');
-                    
                     const csvText = await response.text();
                     
-                    // Verifica se o CSV tem conteúdo válido
-                    if (!csvText || csvText.length < 10) throw new Error('CSV Vazio');
-
-                    const rows = csvText.split(/\r?\n/).filter(row => row.trim().length > 0);
-                    const dataRows = rows.slice(1); // Remove o cabeçalho
-
-                    const parsedData = dataRows.map((line, index) => {
-                        const cols = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
-                        const cleanCols = cols.map(c => c.replace(/^"|"$/g, '').trim());
-
-                        return {
-                            id: index,
-                            name: cleanCols[0] || 'Obrigação',
-                            state: cleanCols[1] || '-',
-                            dueDate: cleanCols[2] || '---',
-                            status: (cleanCols[3] || 'pendente').toLowerCase(),
-                            responsible: cleanCols[4] || 'Equipe',
-                            competence: cleanCols[5] || '---'
-                        };
+                    const rows = csvText.split(/\r?\n/).map(row => {
+                        return row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
                     });
+
+                    // Captura Metadados das células específicas
+                    // Linha 3 (Index 2 no JS): Competência (Col B = Index 1), Eficiência (Col H = Index 7)
+                    // Linha 4 (Index 3 no JS): Total (Col B = Index 1)
+                    if (rows.length >= 4) {
+                        setMeta({
+                            competence: rows[2]?.[1] || '---',
+                            efficiency: rows[2]?.[7] || '0%',
+                            total: rows[3]?.[1] || '0'
+                        });
+                    }
+
+                    // Processa apenas Linhas 5 a 88 (Index 4 a 87 no JS)
+                    const targetData = rows.slice(4, 88);
+                    const parsedData = targetData
+                        .filter(cols => cols[3] && cols[3] !== "") // Só linhas com nome de obrigação
+                        .map((cols, index) => ({
+                            id: index,
+                            empresa: cols[0] || '-',
+                            regime: cols[1] || '-',
+                            tipo: cols[2] || '-',
+                            name: cols[3] || 'Obrigação',
+                            prazo: cols[4] || '---',
+                            situacao: cols[5] || '-',
+                            responsible: cols[6] || 'Equipe',
+                            status: (cols[7] || 'pendente').toLowerCase()
+                        }));
                     
                     setTaxes(parsedData);
-                    setErrorMsg(null);
                 } catch (err) {
-                    console.error("Erro ao sincronizar:", err);
                     setProxyIndex((prev) => (prev + 1) % PROXIES.length);
-                    setErrorMsg("Sincronizando com a nuvem...");
                 } finally {
                     setLoading(false);
                 }
@@ -89,123 +87,87 @@
 
             useEffect(() => {
                 fetchSheetData();
-                const dataTimer = setInterval(fetchSheetData, 60000); // 1 min
+                const dataTimer = setInterval(fetchSheetData, 60000);
                 const clockTimer = setInterval(() => setCurrentTime(new Date()), 1000);
                 return () => { clearInterval(dataTimer); clearInterval(clockTimer); };
             }, [fetchSheetData]);
 
-            const getStatus = (tax) => {
-                const today = new Date();
-                today.setHours(0,0,0,0);
-                let dateStr = tax.dueDate;
-                if(dateStr.includes('/')) {
-                    const parts = dateStr.split('/');
-                    if (parts.length === 3) dateStr = `${parts[2]}-${parts[1]}-${parts[0]}`;
-                }
-                const due = new Date(dateStr + 'T00:00:00');
-                const statusNormal = tax.status.toLowerCase();
-
-                if (statusNormal.includes('pago') || statusNormal.includes('conclu') || statusNormal.includes('feito')) return 'pago';
-                if (isNaN(due.getTime())) return 'pendente';
-                if (due < today) return 'atrasado';
-                if (due.getTime() === today.getTime()) return 'hoje';
+            const getStatusColor = (status) => {
+                if (status.includes('pago') || status.includes('conclu') || status.includes('entregue')) return 'pago';
+                if (status.includes('atraso')) return 'atrasado';
                 return 'pendente';
             };
 
-            const processedTaxes = taxes.map(t => ({ ...t, currentStatus: getStatus(t) }));
-            const stats = {
-                total: processedTaxes.length,
-                pago: processedTaxes.filter(t => t.currentStatus === 'pago').length,
-                atrasado: processedTaxes.filter(t => t.currentStatus === 'atrasado').length,
-                hoje: processedTaxes.filter(t => t.currentStatus === 'hoje').length,
-            };
-            const progress = stats.total > 0 ? Math.round((stats.pago / stats.total) * 100) : 0;
-
             return (
                 <div className="h-screen flex flex-col p-6 lg:p-10 bg-[#020202]">
-                    <header className="flex justify-between items-center mb-8 bg-zinc-900/40 p-6 rounded-[2rem] border border-zinc-800/50 relative overflow-hidden shadow-2xl">
+                    <header className="flex justify-between items-center mb-6 bg-zinc-900/40 p-6 rounded-[2rem] border border-zinc-800/50 relative overflow-hidden">
                         <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#FF4DAD] via-[#A855F7] to-[#00D4FF]"></div>
                         <div className="flex items-center gap-6">
-                            <div className="w-20 h-20 bg-gradient-to-br from-[#FF4DAD] to-[#A855F7] rounded-2xl flex items-center justify-center">
-                                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><path d="M12 2v20M2 12h20M12 2l10 10-10 10L2 12z"/></svg>
+                            <div className="w-16 h-16 bg-gradient-to-br from-[#FF4DAD] to-[#A855F7] rounded-2xl flex items-center justify-center">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><path d="M12 2v20M2 12h20M12 2l10 10-10 10L2 12z"/></svg>
                             </div>
                             <div>
-                                <h1 className="text-5xl font-black text-white uppercase tracking-tighter italic leading-none">GOCASE <span className="text-[#FF4DAD]">TAX</span></h1>
-                                <p className="text-zinc-500 text-xl font-bold tracking-[0.2em] uppercase mt-1">Dash Fiscal 2026</p>
+                                <h1 className="text-4xl font-black text-white uppercase italic leading-none">GOCASE <span className="text-[#FF4DAD]">TAX</span></h1>
+                                <p className="text-zinc-500 text-lg font-bold uppercase mt-1 tracking-wider">Comp: {meta.competence}</p>
                             </div>
                         </div>
-                        <div className="text-right">
-                            <div className="text-7xl font-mono font-black text-white tracking-tighter leading-none italic">
-                                {currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        <div className="text-right flex items-center gap-8">
+                            <div>
+                                <p className="text-zinc-500 text-xs font-black uppercase mb-1">Status de Entrega</p>
+                                <div className="text-4xl font-black text-emerald-400 italic leading-none">{meta.efficiency}</div>
                             </div>
-                            <div className="text-xl text-zinc-400 font-bold mt-1 uppercase tracking-widest">
-                                {currentTime.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+                            <div className="w-px h-12 bg-zinc-800"></div>
+                            <div className="text-6xl font-mono font-black text-white tracking-tighter leading-none italic">
+                                {currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                             </div>
                         </div>
                     </header>
 
-                    <div className="flex-1 flex flex-col gap-8 overflow-hidden">
+                    <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                         <div className="grid grid-cols-4 gap-6 shrink-0">
-                            <Card title="Eficiência" value={`${progress}%`} color="emerald" progress={progress} />
-                            <Card title="Entregues" value={stats.pago} color="emerald" icon="✓" />
-                            <Card title="Vence Hoje" value={stats.hoje} color="yellow" icon="!" pulse={stats.hoje > 0} />
-                            <Card title="Atrasadas" value={stats.atrasado} color="red" icon="⚠" pulse={stats.atrasado > 0} />
+                            <Card title="Eficiência (H3)" value={meta.efficiency} color="emerald" />
+                            <Card title="Total Obrigações (B4)" value={meta.total} color="blue" />
+                            <Card title="Pendentes" value={taxes.filter(t => getStatusColor(t.status) === 'pendente').length} color="yellow" />
+                            <Card title="Atrasadas" value={taxes.filter(t => getStatusColor(t.status) === 'atrasado').length} color="red" pulse={taxes.some(t => getStatusColor(t.status) === 'atrasado')} />
                         </div>
 
                         <div className="flex-1 bg-zinc-900/10 border border-zinc-800/40 rounded-[2.5rem] overflow-hidden flex flex-col shadow-2xl backdrop-blur-md">
-                            <div className="px-10 py-6 border-b border-zinc-800/40 flex justify-between items-center bg-zinc-900/20">
-                                <h2 className="text-2xl font-black text-white uppercase tracking-widest flex items-center gap-4 italic">
-                                    <span className="w-2 h-8 bg-[#FF4DAD] rounded-full"></span> Calendário Tributário
-                                </h2>
-                                {loading ? (
-                                    <div className="text-[#00D4FF] animate-pulse font-black text-lg uppercase italic">Sincronizando...</div>
-                                ) : errorMsg ? (
-                                    <div className="text-zinc-600 font-black text-lg uppercase italic">{errorMsg}</div>
-                                ) : (
-                                    <div className="text-zinc-500 font-bold text-sm uppercase px-4 py-1 bg-zinc-800/30 rounded-lg">Dados em Tempo Real</div>
-                                )}
-                            </div>
-
-                            <div className="grid grid-cols-12 gap-4 px-10 py-4 bg-zinc-800/10 text-zinc-500 text-sm font-black uppercase tracking-widest border-b border-zinc-800/40 italic">
-                                <div className="col-span-5">Obrigação</div>
-                                <div className="col-span-1 text-center">UF</div>
-                                <div className="col-span-2 text-center">Vencimento</div>
+                            <div className="grid grid-cols-12 gap-4 px-10 py-4 bg-zinc-800/20 text-zinc-500 text-xs font-black uppercase tracking-widest border-b border-zinc-800/40 italic">
+                                <div className="col-span-3">Empresa / Tipo</div>
+                                <div className="col-span-3">Obrigação Tributária</div>
+                                <div className="col-span-2 text-center">Prazo</div>
                                 <div className="col-span-2 text-center">Status</div>
-                                <div className="col-span-2 text-right">Owner</div>
+                                <div className="col-span-2 text-right">Responsável</div>
                             </div>
 
-                            <div className="flex-1 overflow-y-auto px-6 py-4 custom-scrollbar">
-                                <div className="flex flex-col gap-3">
-                                    {processedTaxes.length > 0 ? (
-                                        processedTaxes.sort((a,b) => {
-                                            const order = { 'hoje': 0, 'atrasado': 1, 'pendente': 2, 'pago': 3 };
-                                            return order[a.currentStatus] - order[b.currentStatus];
-                                        }).map((tax) => (
-                                            <div key={tax.id} className="grid grid-cols-12 gap-4 px-8 py-6 bg-zinc-900/20 hover:bg-zinc-800/30 rounded-[1.5rem] border border-zinc-800/30 items-center transition-all group">
-                                                <div className="col-span-5">
-                                                    <p className="text-2xl font-bold text-white group-hover:text-[#FF4DAD] transition-colors uppercase tracking-tight">{tax.name}</p>
-                                                    <p className="text-zinc-600 text-lg font-bold">COMPETÊNCIA: {tax.competence}</p>
+                            <div className="flex-1 overflow-y-auto px-4 py-2 custom-scrollbar">
+                                <div className="flex flex-col gap-2">
+                                    {taxes.length > 0 ? (
+                                        taxes.map((tax) => {
+                                            const statusType = getStatusColor(tax.status);
+                                            return (
+                                                <div key={tax.id} className="grid grid-cols-12 gap-4 px-8 py-4 bg-zinc-900/40 rounded-[1.2rem] border border-zinc-800/30 items-center transition-all">
+                                                    <div className="col-span-3">
+                                                        <p className="text-lg font-bold text-white uppercase truncate">{tax.empresa}</p>
+                                                        <p className="text-zinc-600 text-[10px] font-black uppercase">{tax.regime} • {tax.tipo}</p>
+                                                    </div>
+                                                    <div className="col-span-3">
+                                                        <p className="text-xl font-black text-zinc-200 uppercase leading-tight">{tax.name}</p>
+                                                        <p className="text-[#A855F7] text-[10px] font-bold uppercase">{tax.situacao}</p>
+                                                    </div>
+                                                    <div className="col-span-2 text-center text-2xl font-mono font-black text-zinc-400">
+                                                        {tax.prazo}
+                                                    </div>
+                                                    <div className="col-span-2 flex justify-center">
+                                                        <Badge status={statusType} label={tax.status} />
+                                                    </div>
+                                                    <div className="col-span-2 text-right text-sm font-black text-zinc-500 italic uppercase underline decoration-[#FF4DAD] underline-offset-4">{tax.responsible}</div>
                                                 </div>
-                                                <div className="col-span-1 text-center">
-                                                    <span className="px-3 py-1 bg-zinc-800 text-zinc-400 rounded-lg text-lg font-black">{tax.state}</span>
-                                                </div>
-                                                <div className="col-span-2 text-center text-3xl font-mono font-black text-zinc-300">
-                                                    {tax.dueDate}
-                                                </div>
-                                                <div className="col-span-2 flex justify-center">
-                                                    <Badge status={tax.currentStatus} />
-                                                </div>
-                                                <div className="col-span-2 text-right text-xl font-black text-zinc-500 italic uppercase underline decoration-[#A855F7] decoration-2 underline-offset-4">{tax.responsible}</div>
-                                            </div>
-                                        ))
+                                            );
+                                        })
                                     ) : (
-                                        <div className="flex flex-col items-center justify-center py-20">
-                                            {!loading && (
-                                                <div className="text-center">
-                                                    <div className="text-[#FF4DAD] text-3xl font-black uppercase italic mb-4 animate-pulse">Aguardando Google Sheets...</div>
-                                                    <p className="text-zinc-500 font-bold max-w-md uppercase text-sm tracking-widest">A sincronização deve ocorrer em instantes.</p>
-                                                </div>
-                                            )}
+                                        <div className="flex flex-col items-center justify-center h-full opacity-20">
+                                            <p className="text-2xl font-black italic uppercase">Buscando dados linha 5-88...</p>
                                         </div>
                                     )}
                                 </div>
@@ -216,37 +178,30 @@
             );
         }
 
-        function Card({ title, value, color, icon, progress, pulse }) {
+        function Card({ title, value, color, pulse }) {
             const colors = {
                 emerald: 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5',
+                blue: 'text-blue-400 border-blue-500/20 bg-blue-500/5',
                 yellow: 'text-yellow-400 border-yellow-500/20 bg-yellow-500/5',
                 red: 'text-red-500 border-red-500/20 bg-red-500/5'
             };
             return (
-                <div className={`p-6 rounded-[2rem] border ${colors[color]} flex flex-col justify-between h-44 relative overflow-hidden shadow-xl ${pulse ? 'animate-pulse-soft ring-2 ring-current ring-offset-4 ring-offset-black' : ''}`}>
-                    <div className="flex justify-between items-start">
-                        <span className="text-lg font-black uppercase opacity-60 tracking-tighter italic">{title}</span>
-                        {icon && <span className="text-4xl font-black opacity-80">{icon}</span>}
-                    </div>
-                    <div className="text-6xl font-black tracking-tighter leading-none italic">{value}</div>
-                    {progress !== undefined && (
-                        <div className="absolute bottom-0 left-0 h-2 bg-emerald-500 transition-all duration-1000" style={{width: `${progress}%`, boxShadow: '0 0 20px #10b981'}}></div>
-                    )}
+                <div className={`p-4 rounded-[1.5rem] border ${colors[color]} flex flex-col justify-center h-32 relative ${pulse ? 'animate-pulse-soft' : ''}`}>
+                    <span className="text-[10px] font-black uppercase opacity-60 tracking-tighter italic mb-1">{title}</span>
+                    <div className="text-5xl font-black tracking-tighter italic leading-none">{value}</div>
                 </div>
             );
         }
 
-        function Badge({ status }) {
+        function Badge({ status, label }) {
             const styles = {
                 pago: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
-                hoje: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20 animate-pulse',
-                atrasado: 'bg-red-500/10 text-red-500 border-red-500/20 animate-bounce',
-                pendente: 'bg-blue-500/10 text-blue-500 border-blue-500/20'
+                atrasado: 'bg-red-500/10 text-red-500 border-red-500/20 animate-pulse',
+                pendente: 'bg-zinc-800 text-zinc-400 border-zinc-700'
             };
-            const labels = { pago: 'PAGO', hoje: 'HOJE', atrasado: 'CRÍTICO', pendente: 'AGENDADO' };
             return (
-                <span className={`px-6 py-2 rounded-xl font-black text-lg border tracking-widest ${styles[status]}`}>
-                    {labels[status]}
+                <span className={`px-4 py-1 rounded-lg font-black text-[10px] border tracking-widest uppercase ${styles[status]}`}>
+                    {label}
                 </span>
             );
         }
