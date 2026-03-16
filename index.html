@@ -1,90 +1,208 @@
-const { useState, useEffect, useCallback, useRef } = React;
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gocase Tax | Agenda Tributária</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+    <style>
+        /* ... (code omitted for brevity) */
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-const BASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv";
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, useRef } = React;
 
-const CONFIG_COMPETENCIAS = [
-    { id: '802166840', nome: 'Agenda Fev.2026' },
-    { id: '0', nome: 'Agenda Jan.2026' },
-    { id: '135792468', nome: 'Agenda Mar.2026' },
-];
+        const BASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv";
 
-const PROXIES = [
-    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-    (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-    (url) => `https://cors-anywhere.azm.workers.dev/${url}`,
-    (url) => url
-];
+        const CONFIG_COMPETENCIAS = [
+            { id: '802166840', nome: 'Agenda Fev.2026' },
+            { id: '0', nome: 'Agenda Jan.2026' },
+            { id: '135792468', nome: 'Agenda Mar.2026' },
+        ];
 
-const ITEMS_PER_PAGE = 5;
-const SECONDS_PER_PAGE = 12;
+        const PROXIES = [
+            (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+            (url) => `https://cors-anywhere.azm.workers.dev/${url}`,
+            (url) => url
+        ];
 
-function App() {
-    // ... (code omitted for brevity)
+        const ITEMS_PER_PAGE = 5;
+        const SECONDS_PER_PAGE = 12;
 
-    const fetchSheetData = useCallback(async (forcedGid) => {
-        if (isFetching.current) return;
-        isFetching.current = true;
+        function App() {
+            const [currentTime, setCurrentTime] = useState(new Date());
+            const [taxes, setTaxes] = useState([]);
+            const [meta, setMeta] = useState({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
+            const [loading, setLoading] = useState(true);
+            const [currentPage, setCurrentPage] = useState(0);
+            const [isPaused, setIsPaused] = useState(false);
+            const [debugInfo, setDebugInfo] = useState("Sincronizando...");
+            const [selectedGid, setSelectedGid] = useState(() => {
+                return localStorage.getItem('gocase_selected_gid') || CONFIG_COMPETENCIAS[0].id;
+            });
 
-        const targetGid = forcedGid || selectedGid;
-        const csvUrl = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&t=${Date.now()}`;
-        let dataFound = false;
+            const isFetching = useRef(false);
 
-        for (let proxyFn of PROXIES) {
-            try {
-                const finalUrl = proxyFn(csvUrl);
-                const response = await fetch(finalUrl);
+            const parseCSV = (text) => {
+                if (!text || text.trim().startsWith('<!DOCTYPE html>')) return [];
+                const rows = [];
+                const lines = text.split(/\r?\n/);
+                for (let line of lines) {
+                    if (!line.trim()) continue;
+                    const row = [];
+                    let cur = '', inQuotes = false;
+                    for (let char of line) {
+                        if (char === '"') inQuotes = !inQuotes;
+                        else if (char === ',' && !inQuotes) { row.push(cur.trim()); cur = ''; }
+                        else cur += char;
+                    }
+                    row.push(cur.trim());
+                    rows.push(row);
+                }
+                return rows;
+            };
 
-                if (!response.ok) {
-                    if (response.status === 404) {
-                        setDebugInfo("Dados não encontrados.");
-                        setTaxes([]);
-                        setMeta({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
+            const fetchSheetData = useCallback(async (forcedGid) => {
+                if (isFetching.current) return;
+                isFetching.current = true;
+
+                const targetGid = forcedGid || selectedGid;
+                const csvUrl = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&t=${Date.now()}`;
+                let dataFound = false;
+
+                for (let proxyFn of PROXIES) {
+                    try {
+                        const finalUrl = proxyFn(csvUrl);
+                        const response = await fetch(finalUrl);
+
+                        if (!response.ok) {
+                            if (response.status === 404) {
+                                setDebugInfo("Dados não encontrados.");
+                                setTaxes([]);
+                                setMeta({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
+                                setLoading(false);
+                                dataFound = true;
+                                break;
+                            }
+                            continue;
+                        }
+
+                        const text = await response.text();
+                        if (text.length < 100 || text.includes("<html")) continue;
+
+                        const rows = parseCSV(text);
+                        if (rows.length < 5) continue;
+
+                        // Atualiza Metas
+                        setMeta({
+                            qtdTotal: rows[2]?.[1] || '0',
+                            efficiency: rows[2]?.[8] || '0%',
+                            qtdAcessorias: rows[3]?.[1] || '0'
+                        });
+
+                        // Processa Obrigações
+                        const processed = rows.slice(5)
+                            .filter(row => row[4] && row[4] !== "Obrigação")
+                            .map((row, idx) => {
+                                const situacao = (row[6] || "").toLowerCase();
+                                const isDone = ["concluído", "pago", "ok", "entregue"].some(s => situacao.includes(s));
+                                const isAtrasado = situacao.includes("atrasado");
+                                
+                                let urgency = "normal";
+                                if (isDone) urgency = "entregue";
+                                else if (isAtrasado) urgency = "atrasado";
+                                else if (["prazo", "atenção", "urgente"].some(s => situacao.includes(s))) urgency = "alerta";
+
+                                return {
+                                    id: `tax-${targetGid}-${idx}`,
+                                    empresa: row[0] || "-",
+                                    uf: row[1] || "-",
+                                    regime: row[2] || "-",
+                                    tipo: row[3] || "-",
+                                    nome: row[4] || "-",
+                                    prazo: row[5] || "-",
+                                    situacao: row[6] || "Pendente",
+                                    responsavel: row[7] || "-",
+                                    isDone,
+                                    urgency
+                                };
+                            });
+
+                        setTaxes(processed);
                         setLoading(false);
                         dataFound = true;
-                        break;
+                        setDebugInfo("Online");
+                        break; 
+                    } catch (e) {
+                        console.warn("Falha ao tentar proxy:", e.message);
                     }
-                    continue;
                 }
 
-                const text = await response.text();
-                if (text.length < 100 || text.includes("<html")) continue;
+                if (!dataFound && taxes.length === 0) {
+                    setDebugInfo("Erro de Conexão. Tentando novamente...");
+                    setTaxes([]);
+                    setMeta({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
+                    setLoading(false);
+                }
+                isFetching.current = false;
+            }, [selectedGid, taxes.length]);
 
-                const rows = parseCSV(text);
-                if (rows.length < 5) continue;
+            useEffect(() => {
+                fetchSheetData();
+                const clock = setInterval(() => setCurrentTime(new Date()), 1000);
+                const sync = setInterval(() => fetchSheetData(), 30000);
+                return () => { clearInterval(clock); clearInterval(sync); };
+            }, [fetchSheetData]);
 
-                // Atualiza Metas
-                setMeta({
-                    qtdTotal: rows[2]?.[1] || '0',
-                    efficiency: rows[2]?.[8] || '0%',
-                    qtdAcessorias: rows[3]?.[1] || '0'
-                });
+            // Ordenação: Atrasados -> Alerta -> Normal -> Concluídos
+            const sortedTaxes = [...taxes].sort((a, b) => {
+                const priority = { 'atrasado': 0, 'alerta': 1, 'normal': 2, 'entregue': 3 };
+                return priority[a.urgency] - priority[b.urgency];
+            });
 
-                // Processa Obrigações
-                const processed = rows.slice(5)
-                    .filter(row => row[4] && row[4] !== "Obrigação")
-                    .map((row, idx) => {
-                        // ... (code omitted for brevity)
-                    });
+            const totalPages = Math.ceil(sortedTaxes.length / ITEMS_PER_PAGE) || 1;
 
-                setTaxes(processed);
-                setLoading(false);
-                dataFound = true;
-                setDebugInfo("Online");
-                break;
-            } catch (e) {
-                console.warn("Falha ao tentar proxy:", e.message);
-            }
+            useEffect(() => {
+                if (isPaused || loading || totalPages <= 1) return;
+                const timer = setInterval(() => {
+                    setCurrentPage(prev => (prev + 1) % totalPages);
+                }, SECONDS_PER_PAGE * 1000);
+                return () => clearInterval(timer);
+            }, [isPaused, loading, totalPages]);
+
+            const currentItems = sortedTaxes.slice(currentPage * ITEMS_PER_PAGE, (currentPage + 1) * ITEMS_PER_PAGE);
+
+            return (
+                // ... (code omitted for brevity)
+            );
         }
 
-        if (!dataFound && taxes.length === 0) {
-            setDebugInfo("Erro de Conexão. Tentando novamente...");
-            setTaxes([]);
-            setMeta({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
-            setLoading(false);
+        function SummaryCard({ title, value, color }) {
+            const themes = {
+                pink: 'bg-white text-[#FF2A7F] border-pink-100',
+                dark: 'bg-black text-white border-black',
+                green: 'bg-green-50 text-green-600 border-green-200',
+                red: 'bg-red-50 text-red-600 border-red-200'
+            };
+            return (
+                <div className={`p-8 rounded-[3rem] border-2 shadow-lg flex flex-col justify-center h-40 transition-transform hover:scale-105 ${themes[color] || themes.pink}`}>
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] mb-2 opacity-60">{title}</span>
+                    <div className="text-6xl font-black tracking-tighter leading-none">{value}</div>
+                </div>
+            );
         }
-        isFetching.current = false;
-    }, [selectedGid, taxes.length]);
 
-    // ... (code omitted for brevity)
-}
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
