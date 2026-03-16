@@ -33,18 +33,17 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
 
-        const DEFAULT_URL = `https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv`;
+        // URL Base da planilha (sem o GID)
+        const BASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv";
         
         // ==========================================
-        // MENU DE COMPETÊNCIAS (MESES)
-        // Adicione aqui os links de cada aba. O sistema vai "fixar" na escolha do usuário.
+        // CONFIGURAÇÃO DE ABAS (COMPETÊNCIAS)
+        // O id deve ser o GID da aba (aquele número no final da URL de publicação)
         // ==========================================
         const CONFIG_COMPETENCIAS = [
-            { id: 'default', nome: 'Mês Atual (Automático)', url: DEFAULT_URL },
-            // Para adicionar novos meses, desative o comentário abaixo e coloque o link CSV da aba:
-            // { id: 'jan2026', nome: 'Janeiro/2026', url: 'COLE_O_LINK_AQUI' },
-            // { id: 'fev2026', nome: 'Fevereiro/2026', url: 'COLE_O_LINK_AQUI' },
-            // { id: 'mar2026', nome: 'Março/2026', url: 'COLE_O_LINK_AQUI' },
+            { id: '0', nome: 'Agenda Jan.2026' },
+            { id: '123456789', nome: 'Agenda Fev.2026' }, // Exemplo: Substitua pelo GID real da aba Fev
+            { id: '987654321', nome: 'Agenda Mar.2026' }, // Exemplo: Substitua pelo GID real da aba Mar
         ];
 
         const PROXIES = [
@@ -62,18 +61,18 @@
             const [loading, setLoading] = useState(true);
             const [proxyIndex, setProxyIndex] = useState(0);
             const [currentPage, setCurrentPage] = useState(0);
-            const [isPaused, setIsPaused] = useState(false); // Fixar/Pausar a página
+            const [isPaused, setIsPaused] = useState(false);
 
-            // Puxar a competência salva da memória (ou usar o padrão)
-            const [selectedCompetenceId, setSelectedCompetenceId] = useState(() => {
-                return localStorage.getItem('gocase_competence') || 'default';
+            // Puxar a competência salva (GID da aba)
+            const [selectedGid, setSelectedGid] = useState(() => {
+                return localStorage.getItem('gocase_selected_gid') || CONFIG_COMPETENCIAS[0].id;
             });
 
             const fetchSheetData = useCallback(async () => {
                 try {
-                    // Pega o URL baseado na competência selecionada
-                    const currentCompObj = CONFIG_COMPETENCIAS.find(c => c.id === selectedCompetenceId) || CONFIG_COMPETENCIAS[0];
-                    const fetchUrl = PROXIES[proxyIndex](currentCompObj.url);
+                    // Constrói o URL com o GID da aba selecionada
+                    const fetchUrlWithGid = `${BASE_SPREADSHEET_URL}&gid=${selectedGid}`;
+                    const fetchUrl = PROXIES[proxyIndex](fetchUrlWithGid);
                     
                     const response = await fetch(fetchUrl);
                     if (!response.ok) throw new Error('Falha na rede');
@@ -83,6 +82,7 @@
                         return row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
                     });
 
+                    // Metadados fixos: I3 (8), B3 (1), B4 (1)
                     if (rows.length >= 4) {
                         setMeta({
                             qtdTotal: rows[2]?.[1] || '0',
@@ -140,9 +140,8 @@
                 } catch (err) {
                     setProxyIndex((prev) => (prev + 1) % PROXIES.length);
                 }
-            }, [proxyIndex, selectedCompetenceId]);
+            }, [proxyIndex, selectedGid]);
 
-            // Timer de Busca
             useEffect(() => {
                 fetchSheetData();
                 const dataTimer = setInterval(fetchSheetData, 60000);
@@ -153,12 +152,10 @@
             const criticalItems = taxes.filter(t => t.urgency === 'atrasado' || t.urgency === 'alerta');
             const totalPages = Math.ceil(criticalItems.length / ITEMS_PER_PAGE) || 1;
 
-            // Corrige a página se o total diminuir
             useEffect(() => {
                 if (currentPage >= totalPages) setCurrentPage(0);
             }, [totalPages, currentPage]);
 
-            // Lógica de Paginação (Rotaciona se NÃO estiver pausado)
             useEffect(() => {
                 if (totalPages <= 1 || isPaused) return;
                 const pageTimer = setInterval(() => {
@@ -167,11 +164,10 @@
                 return () => clearInterval(pageTimer);
             }, [totalPages, isPaused, criticalItems.length]);
 
-            // Trocar e Fixar a Competência
             const handleCompetenceChange = (e) => {
-                const newId = e.target.value;
-                setSelectedCompetenceId(newId);
-                localStorage.setItem('gocase_competence', newId); // Salva no navegador (Fixa)
+                const newGid = e.target.value;
+                setSelectedGid(newGid);
+                localStorage.setItem('gocase_selected_gid', newGid);
                 setCurrentPage(0);
                 setLoading(true);
             };
@@ -198,11 +194,10 @@
                         
                         <div className="text-right flex items-center gap-6">
                             
-                            {/* SELETOR DE COMPETÊNCIA */}
-                            <div className="flex flex-col justify-center bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
-                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest text-left">Competência</p>
+                            <div className="flex flex-col justify-center bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 shadow-sm min-w-[180px]">
+                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest text-left">Aba Competência</p>
                                 <select 
-                                    value={selectedCompetenceId}
+                                    value={selectedGid}
                                     onChange={handleCompetenceChange}
                                     className="bg-transparent border-none text-[#FF2A7F] font-black outline-none cursor-pointer text-sm p-0 focus:ring-0 uppercase tracking-tight"
                                 >
@@ -254,31 +249,26 @@
                                     <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
                                         <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
                                     </div>
-                                    <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Atenção Necessária</h2>
-                                    {loading && <span className="text-xs font-bold text-slate-400 animate-pulse ml-4">Sincronizando aba...</span>}
+                                    <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Status da Aba Selecionada</h2>
+                                    {loading && <span className="text-xs font-bold text-slate-400 animate-pulse ml-4">Carregando dados da aba...</span>}
                                 </div>
                                 
-                                {/* CONTROLES DE PAGINAÇÃO (PAUSA E NAVEGAÇÃO) */}
                                 <div className="flex items-center gap-4">
                                     {totalPages > 1 && (
                                         <div className="flex items-center bg-slate-100 rounded-xl p-1 shadow-inner">
                                             <button 
                                                 onClick={() => { setCurrentPage(prev => prev > 0 ? prev - 1 : totalPages - 1); setIsPaused(true); }} 
-                                                className="p-2 text-slate-500 hover:bg-white rounded-lg transition-all" title="Página Anterior">
+                                                className="p-2 text-slate-500 hover:bg-white rounded-lg transition-all">
                                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/></svg>
                                             </button>
                                             <button 
                                                 onClick={() => setIsPaused(!isPaused)} 
-                                                className={`p-2 rounded-lg transition-all font-bold text-xs uppercase flex items-center gap-1 ${isPaused ? 'bg-[#FF2A7F] text-white shadow-md' : 'text-slate-500 hover:bg-white'}`} 
-                                                title={isPaused ? "Retomar Rotação" : "Fixar/Pausar Página"}>
-                                                {isPaused ? 
-                                                    <><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Fixado</> : 
-                                                    <><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg> Pausar</>
-                                                }
+                                                className={`px-3 py-2 rounded-lg transition-all font-bold text-xs uppercase flex items-center gap-1 ${isPaused ? 'bg-[#FF2A7F] text-white shadow-md' : 'text-slate-500 hover:bg-white'}`} >
+                                                {isPaused ? 'Fixado' : 'Pausar'}
                                             </button>
                                             <button 
                                                 onClick={() => { setCurrentPage(prev => (prev + 1) % totalPages); setIsPaused(true); }} 
-                                                className="p-2 text-slate-500 hover:bg-white rounded-lg transition-all" title="Próxima Página">
+                                                className="p-2 text-slate-500 hover:bg-white rounded-lg transition-all">
                                                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
                                             </button>
                                         </div>
@@ -344,7 +334,7 @@
                                                     <svg className="w-12 h-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
                                                 </div>
                                                 <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-2">Tudo em dia!</h3>
-                                                <p className="text-slate-500 font-medium">Nenhuma obrigação atrasada ou vencendo nos próximos 2 dias.</p>
+                                                <p className="text-slate-500 font-medium italic">Nenhuma obrigação crítica nesta aba.</p>
                                             </>
                                         )}
                                     </div>
