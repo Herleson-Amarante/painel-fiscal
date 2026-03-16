@@ -1,1 +1,121 @@
 
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gocase Tax Dashboard</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,900;1,900&display=swap" rel="stylesheet">
+    <style>
+        body { background-color: #000; color: #fff; font-family: 'Montserrat', sans-serif; overflow: hidden; }
+        .gocase-pink { color: #FF4DAD; }
+        .gocase-bg-pink { background-color: #FF4DAD; }
+        .italic-900 { font-style: italic; font-weight: 900; }
+        .card { background: #111; border: 1px solid #222; border-radius: 1.5rem; transition: all 0.3s; }
+        .progress-bar { height: 4px; background: linear-gradient(90deg, #FF4DAD, #00D4FF); transition: width 0.5s; }
+        @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-row { animation: fadeUp 0.5s ease-out forwards; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useCallback } = React;
+
+        const SHEET_ID = "2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw";
+        const CSV_URL = `https://docs.google.com/spreadsheets/d/e/${SHEET_ID}/pub?output=csv`;
+        
+        const PROXY = "https://api.allorigins.win/raw?url=";
+
+        function App() {
+            const [data, setData] = useState([]);
+            const [meta, setMeta] = useState({ eff: '0%', total: 0 });
+            const [page, setPage] = useState(0);
+            const [sync, setSync] = useState("");
+            const [loading, setLoading] = useState(true);
+
+            const itemsPerPage = 5;
+
+            const loadData = useCallback(async () => {
+                try {
+                    const response = await fetch(`${PROXY}${encodeURIComponent(CSV_URL + '&cache=' + Date.now())}`);
+                    const text = await response.text();
+                    const rows = text.split('\n').map(row => row.split(',').map(c => c.replace(/"/g, '')));
+                    
+                    if (rows.length > 5) {
+                        setMeta({ eff: rows[2][8] || '0%', total: rows[2][1] || 0 });
+                        const tasks = rows.slice(5).filter(r => r[4]).map((r, i) => ({
+                            id: i,
+                            empresa: r[0],
+                            nome: r[4],
+                            prazo: r[5],
+                            status: r[6],
+                            urgencia: r[6]?.toLowerCase().includes('ok') ? 'done' : (r[6]?.toLowerCase().includes('atras') ? 'alert' : 'pending')
+                        }));
+                        setData(tasks);
+                        setSync(new Date().toLocaleTimeString());
+                        setLoading(false);
+                    }
+                } catch (e) { console.error("Erro na URL/Proxy"); }
+            }, []);
+
+            useEffect(() => {
+                loadData();
+                const i1 = setInterval(loadData, 60000);
+                const i2 = setInterval(() => setPage(p => (p + 1) % Math.ceil(data.length / itemsPerPage || 1)), 10000);
+                return () => { clearInterval(i1); clearInterval(i2); };
+            }, [data.length]);
+
+            const displayData = data.slice(page * itemsPerPage, (page + 1) * itemsPerPage);
+
+            return (
+                <div className="h-screen flex flex-col p-6">
+                    <header className="flex justify-between items-center mb-8">
+                        <div className="text-5xl italic-900 uppercase">gocase<span className="gocase-pink">.</span></div>
+                        <div className="text-right">
+                            <div className="text-gray-500 text-xs font-bold uppercase tracking-widest">Efficiency</div>
+                            <div className="text-5xl italic-900 gocase-pink">{meta.eff}</div>
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-4 gap-4 mb-8">
+                        <div className="card p-6"><div className="text-gray-500 text-xs font-bold mb-1">TOTAL</div><div className="text-4xl italic-900">{meta.total}</div></div>
+                        <div className="card p-6"><div className="text-gray-500 text-xs font-bold mb-1">CONCLUÍDAS</div><div className="text-4xl italic-900 text-emerald-400">{data.filter(t => t.urgencia === 'done').length}</div></div>
+                        <div className="card p-6"><div className="text-gray-500 text-xs font-bold mb-1">PENDENTES</div><div className="text-4xl italic-900 text-yellow-400">{data.filter(t => t.urgencia === 'pending').length}</div></div>
+                        <div className="card p-6 border-[#FF4DAD]/30"><div className="text-gray-500 text-xs font-bold mb-1">SINCRONISMO</div><div className="text-2xl italic-900">{sync}</div></div>
+                    </div>
+
+                    <div className="flex-1 card overflow-hidden flex flex-col">
+                        <div className="progress-bar" style={{ width: `${((page + 1) / Math.ceil(data.length / itemsPerPage)) * 100}%` }}></div>
+                        <div className="p-8 grid grid-cols-12 text-[10px] font-black text-gray-600 uppercase tracking-widest border-b border-white/5">
+                            <div className="col-span-4">Empresa</div>
+                            <div className="col-span-4">Obrigação</div>
+                            <div className="col-span-2 text-center">Prazo</div>
+                            <div className="col-span-2 text-center">Status</div>
+                        </div>
+                        <div className="flex-1 p-4 flex flex-col gap-3">
+                            {displayData.map((item, idx) => (
+                                <div key={item.id} className="grid grid-cols-12 gap-4 p-5 bg-white/5 rounded-2xl items-center animate-row">
+                                    <div className="col-span-4 text-sm font-black uppercase truncate">{item.empresa}</div>
+                                    <div className="col-span-4 text-lg italic-900 uppercase truncate">{item.nome}</div>
+                                    <div className="col-span-2 text-center text-3xl italic-900">{item.prazo}</div>
+                                    <div className="col-span-2 flex justify-center">
+                                        <span className={`px-4 py-1 text-[10px] font-black rounded-full border ${item.urgencia === 'done' ? 'border-emerald-500 text-emerald-500' : 'border-pink-500 text-pink-500'}`}>{item.status}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
