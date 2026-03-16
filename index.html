@@ -1,121 +1,308 @@
-
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gocase Tax Dashboard</title>
+    <title>Gocase Tax | Dashboard 2026</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,900;1,900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,700;0,900;1,900&display=swap" rel="stylesheet">
     <style>
-        body { background-color: #000; color: #fff; font-family: 'Montserrat', sans-serif; overflow: hidden; }
-        .gocase-pink { color: #FF4DAD; }
-        .gocase-bg-pink { background-color: #FF4DAD; }
+        :root { 
+            --gocase-pink: #FF4DAD; 
+            --gocase-light-bg: #F9F9F9;
+            --gocase-white: #FFFFFF;
+        }
+        body { 
+            background-color: var(--gocase-light-bg); 
+            color: #1A1A1A; 
+            font-family: 'Montserrat', sans-serif; 
+            margin: 0; 
+            overflow: hidden; 
+        }
+        .gocase-pink { color: var(--gocase-pink); }
+        .bg-gocase-pink { background-color: var(--gocase-pink); }
         .italic-900 { font-style: italic; font-weight: 900; }
-        .card { background: #111; border: 1px solid #222; border-radius: 1.5rem; transition: all 0.3s; }
-        .progress-bar { height: 4px; background: linear-gradient(90deg, #FF4DAD, #00D4FF); transition: width 0.5s; }
-        @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        .animate-row { animation: fadeUp 0.5s ease-out forwards; }
+        .card { 
+            background: var(--gocase-white); 
+            border: 1px solid #EDEDED; 
+            border-radius: 1.5rem; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.03);
+        }
+        @keyframes fadeIn { 
+            from { opacity: 0; transform: translateY(10px); } 
+            to { opacity: 1; transform: translateY(0); } 
+        }
+        .animate-row { animation: fadeIn 0.4s ease-out forwards; }
+        .loading-bar {
+            height: 4px;
+            background: var(--gocase-pink);
+            box-shadow: 0 0 8px rgba(255, 77, 173, 0.4);
+        }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
+        const { useState, useEffect, useCallback, useMemo } = React;
 
-        const SHEET_ID = "2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw";
-        const CSV_URL = `https://docs.google.com/spreadsheets/d/e/${SHEET_ID}/pub?output=csv`;
+        // Lista de competências conforme as abas da sua planilha
+        const COMPETENCIAS = [
+            { label: "JAN-2026", gid: "0" },
+            { label: "FEV-2026", gid: "802166840" },
+            { label: "MAR-2026", gid: "123456789" }, 
+            { label: "ABR-2026", gid: "223344556" },
+            { label: "MAI-2026", gid: "778899001" },
+            { label: "JUN-2026", gid: "112233445" }
+        ];
+
+        const BASE_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv";
         
-        const PROXY = "https://api.allorigins.win/raw?url=";
+        const PROXIES = [
+            "https://api.allorigins.win/raw?url=",
+            "https://corsproxy.io/?",
+            "https://api.codetabs.com/v1/proxy?quest="
+        ];
 
         function App() {
-            const [data, setData] = useState([]);
-            const [meta, setMeta] = useState({ eff: '0%', total: 0 });
-            const [page, setPage] = useState(0);
-            const [sync, setSync] = useState("");
+            const [rawData, setRawData] = useState([]);
+            const [meta, setMeta] = useState({ efficiency: '0%', total: 0 });
             const [loading, setLoading] = useState(true);
+            const [time, setTime] = useState(new Date());
+            const [competenciaIdx, setCompetenciaIdx] = useState(1); // FEV-2026 padrão
+            const [currentPageType, setCurrentPageType] = useState('ATRASADO');
+            const [errorMsg, setErrorMsg] = useState("");
 
-            const itemsPerPage = 5;
+            const parseCSV = (text) => {
+                if (!text) return [];
+                const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
+                return lines.map(line => {
+                    const matches = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
+                    return matches.map(val => val.replace(/^"|"$/g, "").trim());
+                });
+            };
 
             const loadData = useCallback(async () => {
-                try {
-                    const response = await fetch(`${PROXY}${encodeURIComponent(CSV_URL + '&cache=' + Date.now())}`);
-                    const text = await response.text();
-                    const rows = text.split('\n').map(row => row.split(',').map(c => c.replace(/"/g, '')));
-                    
-                    if (rows.length > 5) {
-                        setMeta({ eff: rows[2][8] || '0%', total: rows[2][1] || 0 });
-                        const tasks = rows.slice(5).filter(r => r[4]).map((r, i) => ({
-                            id: i,
-                            empresa: r[0],
-                            nome: r[4],
-                            prazo: r[5],
-                            status: r[6],
-                            urgencia: r[6]?.toLowerCase().includes('ok') ? 'done' : (r[6]?.toLowerCase().includes('atras') ? 'alert' : 'pending')
-                        }));
-                        setData(tasks);
-                        setSync(new Date().toLocaleTimeString());
-                        setLoading(false);
+                setLoading(true);
+                setErrorMsg("");
+                let success = false;
+                
+                const activeComp = COMPETENCIAS[competenciaIdx];
+                const cacheBuster = `&cb=${Date.now()}`;
+                const sheetUrl = `${BASE_URL}&gid=${activeComp.gid}${cacheBuster}`;
+
+                for (const proxyBase of PROXIES) {
+                    if (success) break;
+                    try {
+                        const targetUrl = `${proxyBase}${encodeURIComponent(sheetUrl)}`;
+                        const res = await fetch(targetUrl);
+                        if (!res.ok) throw new Error();
+                        
+                        const text = await res.text();
+                        const rows = parseCSV(text);
+                        
+                        if (rows.length >= 3) {
+                            // Metadados solicitados:
+                            // Eficiência: Coluna I (índice 8), Linha 3 (índice 2)
+                            // Quantidade: Coluna B (índice 1), Linha 3 (índice 2)
+                            setMeta({
+                                efficiency: rows[2]?.[8] || "0%", 
+                                total: rows[2]?.[1] || "0"
+                            });
+
+                            // Dados: Início na Linha 6 (índice 5)
+                            // A:Empresa, B:UF, C:Regime, D:Tipo, E:Obrigação, F:Prazo, G:Situação, H:Responsável, I:Status
+                            const tasks = rows.slice(5)
+                                .filter(r => r[0] && r[0].trim() !== "" && r[0] !== "Empresa")
+                                .map((r, i) => ({
+                                    id: i,
+                                    empresa: r[0] || "---",
+                                    uf: r[1] || "--",
+                                    regime: r[2] || "--",
+                                    tipo: r[3] || "---",
+                                    obrigacao: r[4] || "---",
+                                    prazo: r[5] || "--",
+                                    situacao: (r[6] || "PENDENTE").toUpperCase(),
+                                    responsavel: r[7] || "---",
+                                    statusCol: r[8] || "" // Coluna I extra
+                                }));
+
+                            setRawData(tasks);
+                            setLoading(false);
+                            success = true;
+                        }
+                    } catch (e) {
+                        console.warn("Proxy instável, tentando próximo...");
                     }
-                } catch (e) { console.error("Erro na URL/Proxy"); }
-            }, []);
+                }
+
+                if (!success) {
+                    setLoading(false);
+                    setErrorMsg("Erro de conexão com a planilha.");
+                }
+            }, [competenciaIdx]);
 
             useEffect(() => {
                 loadData();
-                const i1 = setInterval(loadData, 60000);
-                const i2 = setInterval(() => setPage(p => (p + 1) % Math.ceil(data.length / itemsPerPage || 1)), 10000);
-                return () => { clearInterval(i1); clearInterval(i2); };
-            }, [data.length]);
+                const clock = setInterval(() => setTime(new Date()), 1000);
+                const sync = setInterval(loadData, 60000); // Sincronização a cada 1 min
+                return () => { clearInterval(clock); clearInterval(sync); };
+            }, [loadData]);
 
-            const displayData = data.slice(page * itemsPerPage, (page + 1) * itemsPerPage);
+            // Ciclo de exibição por status
+            useEffect(() => {
+                if (rawData.length === 0) return;
+                const statusOrder = ['ATRASADO', 'NO PRAZO', 'CONCLUÍDA'];
+                const interval = setInterval(() => {
+                    setCurrentPageType(prev => {
+                        const idx = statusOrder.indexOf(prev);
+                        return statusOrder[(idx + 1) % statusOrder.length];
+                    });
+                }, 10000); 
+                return () => clearInterval(interval);
+            }, [rawData]);
+
+            const filteredData = useMemo(() => {
+                return rawData.filter(item => {
+                    if (currentPageType === 'CONCLUÍDA') {
+                        return item.situacao.includes('CONCLUÍDA') || item.situacao.includes('OK') || item.situacao.includes('ENTREGUE');
+                    }
+                    if (currentPageType === 'NO PRAZO') {
+                        return item.situacao.includes('NO PRAZO') || item.situacao.includes('PENDENTE');
+                    }
+                    return item.situacao.includes(currentPageType);
+                }).slice(0, 5); 
+            }, [rawData, currentPageType]);
 
             return (
-                <div className="h-screen flex flex-col p-6">
-                    <header className="flex justify-between items-center mb-8">
-                        <div className="text-5xl italic-900 uppercase">gocase<span className="gocase-pink">.</span></div>
-                        <div className="text-right">
-                            <div className="text-gray-500 text-xs font-bold uppercase tracking-widest">Efficiency</div>
-                            <div className="text-5xl italic-900 gocase-pink">{meta.eff}</div>
+                <div className="h-screen flex flex-col p-8 space-y-6">
+                    {/* Header */}
+                    <header className="flex justify-between items-center bg-white p-6 rounded-3xl border border-gray-100 shadow-sm">
+                        <div className="flex items-center gap-8">
+                            <div className="text-5xl italic-900 tracking-tighter">
+                                GOCASE<span className="gocase-pink">.</span>
+                            </div>
+                            <div className="h-10 w-[1px] bg-gray-100"></div>
+                            <div className="flex bg-gray-50 rounded-2xl p-1 gap-1">
+                                {COMPETENCIAS.map((comp, idx) => (
+                                    <button 
+                                        key={comp.label}
+                                        onClick={() => setCompetenciaIdx(idx)}
+                                        className={`px-4 py-2 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${competenciaIdx === idx ? 'bg-white shadow-sm gocase-pink border border-gray-100' : 'text-gray-300 hover:text-gray-500'}`}
+                                    >
+                                        {comp.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-10">
+                            <div className="text-right border-r pr-10 border-gray-100">
+                                <div className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Efficiency (I3)</div>
+                                <div className="text-4xl italic-900 gocase-pink">{meta.efficiency}</div>
+                            </div>
+                            <div className="text-6xl font-black tracking-tighter text-gray-900 tabular-nums">
+                                {time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            </div>
                         </div>
                     </header>
 
-                    <div className="grid grid-cols-4 gap-4 mb-8">
-                        <div className="card p-6"><div className="text-gray-500 text-xs font-bold mb-1">TOTAL</div><div className="text-4xl italic-900">{meta.total}</div></div>
-                        <div className="card p-6"><div className="text-gray-500 text-xs font-bold mb-1">CONCLUÍDAS</div><div className="text-4xl italic-900 text-emerald-400">{data.filter(t => t.urgencia === 'done').length}</div></div>
-                        <div className="card p-6"><div className="text-gray-500 text-xs font-bold mb-1">PENDENTES</div><div className="text-4xl italic-900 text-yellow-400">{data.filter(t => t.urgencia === 'pending').length}</div></div>
-                        <div className="card p-6 border-[#FF4DAD]/30"><div className="text-gray-500 text-xs font-bold mb-1">SINCRONISMO</div><div className="text-2xl italic-900">{sync}</div></div>
+                    {/* KPIs */}
+                    <div className="grid grid-cols-4 gap-6">
+                        <KPICard title="Quantidade (B3)" value={meta.total} label="Obrigações Totais" />
+                        <KPICard title="Mês Selecionado" value={COMPETENCIAS[competenciaIdx].label} label="Exercício 2026" />
+                        <KPICard title="Filtro de Tela" value={currentPageType} isStatus />
+                        <KPICard title="Itens na Lista" value={filteredData.length} label="Exibindo top 5" />
                     </div>
 
-                    <div className="flex-1 card overflow-hidden flex flex-col">
-                        <div className="progress-bar" style={{ width: `${((page + 1) / Math.ceil(data.length / itemsPerPage)) * 100}%` }}></div>
-                        <div className="p-8 grid grid-cols-12 text-[10px] font-black text-gray-600 uppercase tracking-widest border-b border-white/5">
-                            <div className="col-span-4">Empresa</div>
-                            <div className="col-span-4">Obrigação</div>
-                            <div className="col-span-2 text-center">Prazo</div>
-                            <div className="col-span-2 text-center">Status</div>
+                    {/* Tabela */}
+                    <div className="flex-1 card overflow-hidden flex flex-col relative bg-white border-gray-100">
+                        <div className="w-full h-1 bg-gray-50">
+                            <div className="loading-bar transition-all duration-[10000ms] ease-linear" key={`${competenciaIdx}-${currentPageType}`} style={{width: '100%'}}></div>
                         </div>
-                        <div className="flex-1 p-4 flex flex-col gap-3">
-                            {displayData.map((item, idx) => (
-                                <div key={item.id} className="grid grid-cols-12 gap-4 p-5 bg-white/5 rounded-2xl items-center animate-row">
-                                    <div className="col-span-4 text-sm font-black uppercase truncate">{item.empresa}</div>
-                                    <div className="col-span-4 text-lg italic-900 uppercase truncate">{item.nome}</div>
-                                    <div className="col-span-2 text-center text-3xl italic-900">{item.prazo}</div>
-                                    <div className="col-span-2 flex justify-center">
-                                        <span className={`px-4 py-1 text-[10px] font-black rounded-full border ${item.urgencia === 'done' ? 'border-emerald-500 text-emerald-500' : 'border-pink-500 text-pink-500'}`}>{item.status}</span>
-                                    </div>
+
+                        <div className="px-10 py-5 grid grid-cols-12 text-[10px] font-black text-gray-400 uppercase tracking-[0.3em] bg-gray-50/50 border-b border-gray-100">
+                            <div className="col-span-3">Empresa / UF / Regime</div>
+                            <div className="col-span-4">Obrigação Tributária</div>
+                            <div className="col-span-1 text-center">Prazo</div>
+                            <div className="col-span-2 text-center">Responsável</div>
+                            <div className="col-span-2 text-center">Situação</div>
+                        </div>
+
+                        <div className="flex-1 p-6 flex flex-col gap-4">
+                            {loading ? (
+                                <div className="flex-1 flex items-center justify-center text-xl font-black gocase-pink italic-900 animate-pulse uppercase">
+                                    Sincronizando Dados...
                                 </div>
-                            ))}
+                            ) : errorMsg ? (
+                                <div className="flex-1 flex items-center justify-center text-red-400 font-bold uppercase text-xs">{errorMsg}</div>
+                            ) : filteredData.length > 0 ? (
+                                filteredData.map((item) => (
+                                    <div key={item.id} className="grid grid-cols-12 gap-4 p-6 bg-white rounded-3xl items-center border border-gray-100 shadow-sm animate-row">
+                                        <div className="col-span-3">
+                                            <div className="text-[10px] font-black text-gocase-pink uppercase mb-1">{item.uf} • {item.regime}</div>
+                                            <div className="text-sm font-black text-black uppercase truncate">{item.empresa}</div>
+                                        </div>
+                                        <div className="col-span-4">
+                                            <div className="text-[9px] font-bold text-gray-400 uppercase mb-1">{item.tipo}</div>
+                                            <div className="text-xl font-black text-black leading-tight uppercase truncate">{item.obrigacao}</div>
+                                        </div>
+                                        <div className="col-span-1 text-center text-4xl italic-900 text-gray-800">
+                                            {item.prazo}
+                                        </div>
+                                        <div className="col-span-2 text-center text-[10px] font-bold text-gray-500 uppercase">
+                                            {item.responsavel}
+                                        </div>
+                                        <div className="col-span-2 flex justify-center">
+                                            <StatusBadge status={item.situacao} />
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="flex-1 flex flex-col items-center justify-center opacity-20">
+                                    <div className="text-8xl italic-900">VAZIO</div>
+                                    <div className="text-xs font-black uppercase tracking-widest mt-2">Nenhum registro encontrado</div>
+                                </div>
+                            )}
                         </div>
                     </div>
+
+                    <footer className="flex justify-between items-center px-4">
+                        <div className="text-[9px] font-bold uppercase tracking-[0.5em] text-gray-300 italic">Gocase Tax Realtime Dashboard // 2026</div>
+                        <div className="flex items-center gap-3">
+                             <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+                             <div className="text-[9px] font-black uppercase tracking-widest text-gray-400">Database Live</div>
+                        </div>
+                    </footer>
                 </div>
             );
         }
 
-        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+        function StatusBadge({ status }) {
+            const normalized = status.toUpperCase();
+            const isOk = normalized.includes("CONCLUÍDA") || normalized.includes("OK") || normalized.includes("ENTREGUE");
+            const isLate = normalized.includes("ATRASADO");
+            let colorClass = "border-blue-100 text-blue-500 bg-blue-50/40";
+            if (isOk) colorClass = "border-emerald-100 text-emerald-500 bg-emerald-50/40";
+            if (isLate) colorClass = "border-red-100 text-red-500 bg-red-50/40 animate-pulse";
+            return <span className={`px-5 py-2 rounded-full text-[9px] font-black uppercase border ${colorClass}`}>{status}</span>;
+        }
+
+        function KPICard({ title, value, label, isStatus = false }) {
+            return (
+                <div className="card p-7 flex flex-col justify-center border-gray-100">
+                    <div className="text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1">{title}</div>
+                    <div className={`${isStatus ? 'text-2xl' : 'text-5xl'} italic-900 tracking-tighter text-black truncate uppercase`}>{value}</div>
+                    {label && <div className="text-[9px] font-bold text-gray-300 uppercase mt-1 tracking-wider">{label}</div>}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>
