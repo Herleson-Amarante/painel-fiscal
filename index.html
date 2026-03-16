@@ -26,8 +26,8 @@
         }
         ::-webkit-scrollbar { display: none; }
         .loading-overlay {
-            background: rgba(243, 244, 246, 0.85);
-            backdrop-filter: blur(10px);
+            background: rgba(243, 244, 246, 0.9);
+            backdrop-filter: blur(8px);
         }
     </style>
 </head>
@@ -45,13 +45,17 @@
             { id: '135792468', nome: 'Agenda Mar.2026' },
         ];
 
+        // Proxies atualizados para maior compatibilidade
         const PROXIES = [
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
+            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+            (url) => url // Tentativa direta como último recurso
         ];
 
         const ITEMS_PER_PAGE = 5;
         const SECONDS_PER_PAGE = 10; 
+        const FETCH_TIMEOUT = 20000; // Aumentado para 20 segundos
 
         function App() {
             const [currentTime, setCurrentTime] = useState(new Date());
@@ -61,94 +65,124 @@
             const [proxyIndex, setProxyIndex] = useState(0);
             const [currentPage, setCurrentPage] = useState(0);
             const [isPaused, setIsPaused] = useState(false);
+            const [errorMsg, setErrorMsg] = useState(null);
 
             const [selectedGid, setSelectedGid] = useState(() => {
                 return localStorage.getItem('gocase_selected_gid') || CONFIG_COMPETENCIAS[0].id;
             });
 
+            const parseCSV = (text) => {
+                const rows = [];
+                let row = [];
+                let col = "";
+                let inQuotes = false;
+                for (let i = 0; i < text.length; i++) {
+                    let char = text[i];
+                    if (char === '"' && text[i+1] === '"') { col += '"'; i++; }
+                    else if (char === '"') inQuotes = !inQuotes;
+                    else if (char === ',' && !inQuotes) { row.push(col.trim()); col = ""; }
+                    else if (char === '\n' && !inQuotes) { row.push(col.trim()); rows.push(row); row = []; col = ""; }
+                    else col += char;
+                }
+                if (col || row.length) { row.push(col.trim()); rows.push(row); }
+                return rows;
+            };
+
             const fetchSheetData = useCallback(async (forcedGid) => {
                 const targetGid = forcedGid || selectedGid;
-                let currentTryProxy = proxyIndex;
-
-                try {
-                    const fetchUrlWithGid = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&single=true&t=${Date.now()}`;
-                    const fetchUrl = PROXIES[currentTryProxy](fetchUrlWithGid);
-                    
-                    const response = await fetch(fetchUrl);
-                    const csvText = await response.text();
-                    
-                    const rows = csvText.split(/\r?\n/).map(row => {
-                        return row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
-                    });
-
-                    // MAPEAMENTO ESPECÍFICO CONFORME SOLICITADO
-                    // Coluna I (índice 8), Linha 3 (índice 2) -> Eficiência
-                    // Coluna B (índice 1), Linha 3 (índice 2) -> Qtd Total
-                    // Coluna B (índice 1), Linha 4 (índice 3) -> Qtd Acessórias
-                    if (rows.length >= 4) {
-                        setMeta({
-                            qtdTotal: rows[2]?.[1] || '0',
-                            efficiency: rows[2]?.[8] || '0%',
-                            qtdAcessorias: rows[3]?.[1] || '0'
+                let success = false;
+                
+                // Itera pelos proxies disponíveis
+                for (let i = 0; i < PROXIES.length; i++) {
+                    const currentIdx = (proxyIndex + i) % PROXIES.length;
+                    try {
+                        const csvUrl = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&single=true&cachebuster=${Date.now()}`;
+                        const finalUrl = PROXIES[currentIdx](csvUrl);
+                        
+                        const controller = new AbortController();
+                        const id = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+                        
+                        const response = await fetch(finalUrl, { 
+                            signal: controller.signal,
+                            headers: { 'Cache-Control': 'no-cache' }
                         });
+                        clearTimeout(id);
+                        
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        
+                        const text = await response.text();
+                        if (!text || text.length < 100) throw new Error("Documento vazio ou inválido");
+
+                        const rows = parseCSV(text);
+                        
+                        if (rows.length >= 4) {
+                            setMeta({
+                                qtdTotal: rows[2]?.[1] || '0',
+                                efficiency: rows[2]?.[8] || '0%',
+                                qtdAcessorias: rows[3]?.[1] || '0'
+                            });
+                        }
+
+                        const rawTaxes = rows.slice(5, 88);
+                        const processed = rawTaxes
+                            .filter(row => row[4] && row[4] !== "" && row[4] !== "Obrigação")
+                            .map((row, idx) => {
+                                const situacao = (row[6] || "").toLowerCase();
+                                const isDone = situacao.includes("conclu") || situacao.includes("pago") || situacao.includes("ok");
+                                const isAtrasado = situacao.includes("atrasado");
+                                
+                                let urgency = "normal";
+                                if (isDone) urgency = "entregue";
+                                else if (isAtrasado) urgency = "atrasado";
+                                else if (situacao.includes("prazo")) urgency = "alerta";
+
+                                return {
+                                    id: idx,
+                                    empresa: row[0] || "-",
+                                    uf: row[1] || "-",
+                                    regime: row[2] || "-",
+                                    tipo: row[3] || "-",
+                                    nome: row[4] || "-",
+                                    prazo: row[5] || "-",
+                                    situacao: row[6] || "Pendente",
+                                    responsavel: row[7] || "-",
+                                    isDone,
+                                    urgency
+                                };
+                            });
+
+                        if (processed.length === 0) throw new Error("Nenhum dado processado");
+
+                        setTaxes(processed);
+                        setLoading(false);
+                        setErrorMsg(null);
+                        setProxyIndex(currentIdx);
+                        success = true;
+                        break; 
+                    } catch (err) {
+                        console.error(`Falha no proxy ${currentIdx}:`, err.message);
                     }
-
-                    // Dados das Obrigações: Linha 6 (índice 5) até Linha 88 (índice 87)
-                    const targetData = rows.slice(5, 88); 
-                    const today = new Date();
-                    today.setHours(0,0,0,0);
-
-                    const parsedData = targetData
-                        .filter(cols => cols[4] && cols[4] !== "") // Coluna E (índice 4) é a Obrigação
-                        .map((cols, index) => {
-                            // Coluna G (índice 6) -> Situação (Concluído, No prazo, Atrasado)
-                            const situacaoStr = (cols[6] || '').toLowerCase();
-                            const isDone = situacaoStr.includes('conclu') || situacaoStr.includes('pago') || situacaoStr.includes('ok');
-                            const isAtrasado = situacaoStr.includes('atrasado');
-
-                            const item = {
-                                id: index,
-                                empresa: cols[0] || '-',    // Coluna A
-                                uf: cols[1] || '-',         // Coluna B
-                                regime: cols[2] || '-',     // Coluna C
-                                tipo: cols[3] || '-',       // Coluna D
-                                name: cols[4] || '-',       // Coluna E
-                                prazo: cols[5] || '-',      // Coluna F
-                                situacao: cols[6] || '-',   // Coluna G
-                                responsible: cols[7] || '-', // Coluna H
-                                isDone: isDone,
-                                isAtrasado: isAtrasado
-                            };
-
-                            let urgency = 'normal';
-                            if (isDone) urgency = 'entregue';
-                            else if (isAtrasado) urgency = 'atrasado';
-                            else if (item.situacao.toLowerCase().includes('prazo')) urgency = 'alerta';
-
-                            return { ...item, urgency };
-                        });
-                    
-                    setTaxes(parsedData);
+                }
+                
+                if (!success) {
+                    setErrorMsg("Erro de conexão persistente. Verifique se a planilha está publicada.");
                     setLoading(false);
-                } catch (err) {
-                    console.error("Erro na busca:", err);
-                    setProxyIndex((proxyIndex + 1) % PROXIES.length);
                 }
             }, [proxyIndex, selectedGid]);
 
             useEffect(() => {
                 fetchSheetData();
-                const dataTimer = setInterval(() => fetchSheetData(), 60000);
                 const clockTimer = setInterval(() => setCurrentTime(new Date()), 1000);
-                return () => { clearInterval(dataTimer); clearInterval(clockTimer); };
+                const syncTimer = setInterval(() => fetchSheetData(), 45000); // 45s
+                return () => { clearInterval(clockTimer); clearInterval(syncTimer); };
             }, [fetchSheetData]);
 
-            const sortedItems = [...taxes].sort((a, b) => {
+            const sortedTaxes = [...taxes].sort((a, b) => {
                 const order = { 'atrasado': 0, 'alerta': 1, 'normal': 2, 'entregue': 3 };
                 return order[a.urgency] - order[b.urgency];
             });
 
-            const totalPages = Math.ceil(sortedItems.length / ITEMS_PER_PAGE) || 1;
+            const totalPages = Math.ceil(sortedTaxes.length / ITEMS_PER_PAGE) || 1;
 
             useEffect(() => {
                 if (isPaused || loading || totalPages <= 1) return;
@@ -158,28 +192,26 @@
                 return () => clearInterval(timer);
             }, [isPaused, loading, totalPages]);
 
-            const handleCompetenceChange = (e) => {
-                const newGid = e.target.value;
-                setSelectedGid(newGid);
-                localStorage.setItem('gocase_selected_gid', newGid);
-                setTaxes([]);
-                setCurrentPage(0);
-                setLoading(true);
-                fetchSheetData(newGid);
-            };
-
-            const currentDisplayItems = sortedItems.slice(
-                currentPage * ITEMS_PER_PAGE, 
-                (currentPage + 1) * ITEMS_PER_PAGE
-            );
+            const currentItems = sortedTaxes.slice(currentPage * ITEMS_PER_PAGE, (currentPage + 1) * ITEMS_PER_PAGE);
 
             return (
                 <div className="h-screen flex flex-col p-6 lg:p-8 bg-[#F3F4F6] relative">
                     
-                    {loading && taxes.length === 0 && (
-                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center loading-overlay">
+                    {(loading && taxes.length === 0) && (
+                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center loading-overlay text-center px-4">
                             <div className="w-16 h-16 border-4 border-[#FF2A7F] border-t-transparent rounded-full animate-spin mb-4"></div>
-                            <p className="text-[#FF2A7F] font-black uppercase tracking-widest text-xl">Sincronizando Gocase Tax...</p>
+                            <p className="text-[#FF2A7F] font-black uppercase tracking-widest text-xl">
+                                {errorMsg ? "Tentando Reestabelecer..." : "Sincronizando Gocase Tax..."}
+                            </p>
+                            {errorMsg && <p className="text-slate-500 mt-2 text-sm max-w-md">{errorMsg}</p>}
+                            {errorMsg && (
+                                <button 
+                                    onClick={() => { setLoading(true); fetchSheetData(); }}
+                                    className="mt-6 px-6 py-2 bg-black text-white rounded-full font-bold uppercase text-xs tracking-widest hover:bg-[#FF2A7F] transition-colors"
+                                >
+                                    Tentar Novamente Agora
+                                </button>
+                            )}
                         </div>
                     )}
 
@@ -190,16 +222,22 @@
                             </div>
                             <div>
                                 <h1 className="text-2xl font-bold text-slate-800 uppercase tracking-tight">Agenda Tributária</h1>
-                                <p className="text-slate-400 text-sm font-semibold uppercase tracking-widest">Dashboard 2026</p>
+                                <p className="text-slate-400 text-sm font-semibold uppercase tracking-widest">Controle 2026</p>
                             </div>
                         </div>
                         
                         <div className="flex items-center gap-6">
                             <div className="bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
-                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest">Aba Atual</p>
+                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest">Visualizando</p>
                                 <select 
                                     value={selectedGid}
-                                    onChange={handleCompetenceChange}
+                                    onChange={(e) => {
+                                        setSelectedGid(e.target.value);
+                                        localStorage.setItem('gocase_selected_gid', e.target.value);
+                                        setLoading(true);
+                                        setTaxes([]);
+                                        setCurrentPage(0);
+                                    }}
                                     className="bg-transparent border-none text-[#FF2A7F] font-black outline-none cursor-pointer text-base p-0 focus:ring-0 uppercase"
                                 >
                                     {CONFIG_COMPETENCIAS.map(comp => (
@@ -209,7 +247,7 @@
                             </div>
 
                             <div className="text-right">
-                                <p className="text-slate-400 text-xs font-bold uppercase mb-1 tracking-tighter">Eficiência Global</p>
+                                <p className="text-slate-400 text-xs font-bold uppercase mb-1 tracking-tighter">Eficiência (I3)</p>
                                 <div className="text-3xl font-black text-[#FF2A7F]">{meta.efficiency}</div>
                             </div>
 
@@ -223,10 +261,10 @@
                     <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                         
                         <div className="grid grid-cols-4 gap-6 shrink-0">
-                            <SummaryCard title="Total Obrigações (B3)" value={meta.qtdTotal} color="dark" />
+                            <SummaryCard title="Total (B3)" value={meta.qtdTotal} color="dark" />
                             <SummaryCard title="Acessórias (B4)" value={meta.qtdAcessorias} color="pink" />
                             <SummaryCard title="Concluídas" value={taxes.filter(t => t.isDone).length} color="green" />
-                            <SummaryCard title="Em Atraso" value={taxes.filter(t => t.urgency === 'atrasado').length} color="red" />
+                            <SummaryCard title="Atrasadas" value={taxes.filter(t => t.urgency === 'atrasado').length} color="red" />
                         </div>
 
                         <div className="flex-1 bg-white rounded-[2.5rem] overflow-hidden flex flex-col shadow-lg border border-slate-100 relative">
@@ -243,7 +281,7 @@
                             <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-white">
                                 <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight flex items-center gap-3">
                                     <span className="w-2 h-6 bg-black rounded-full"></span>
-                                    Cronograma Operacional
+                                    Fila de Processamento
                                 </h2>
                                 
                                 <div className="flex items-center gap-6">
@@ -271,7 +309,6 @@
                                             <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
                                         </button>
                                     </div>
-
                                     <div className="px-5 py-2 bg-slate-800 text-white rounded-xl text-xs font-black">
                                         Pág {currentPage + 1} / {totalPages}
                                     </div>
@@ -282,12 +319,12 @@
                                 <div className="col-span-3">Empresa / Regime</div>
                                 <div className="col-span-4">Obrigação / Tipo</div>
                                 <div className="col-span-2 text-center">Prazo</div>
-                                <div className="col-span-2 text-center">Situação (G)</div>
-                                <div className="col-span-1 text-right">Resp.</div>
+                                <div className="col-span-2 text-center">Situação</div>
+                                <div className="col-span-1 text-right">Responsável</div>
                             </div>
 
                             <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-start gap-3">
-                                {currentDisplayItems.map((tax, idx) => (
+                                {currentItems.map((tax, idx) => (
                                     <div 
                                         key={`${tax.id}-${currentPage}`} 
                                         className={`grid grid-cols-12 gap-4 px-6 py-5 rounded-2xl border shadow-sm items-center animate-slide ${
@@ -303,7 +340,7 @@
                                         </div>
                                         <div className="col-span-4">
                                             <p className={`text-base font-black uppercase leading-tight truncate ${tax.isDone ? 'text-slate-400 line-through' : 'text-black'}`}>
-                                                {tax.name}
+                                                {tax.nome}
                                             </p>
                                             <p className="text-[10px] font-bold text-[#FF2A7F] uppercase mt-0.5">{tax.tipo}</p>
                                         </div>
@@ -319,10 +356,15 @@
                                             </span>
                                         </div>
                                         <div className="col-span-1 text-right">
-                                            <p className="text-[11px] font-black uppercase text-slate-500">{tax.responsible.split(' ')[0]}</p>
+                                            <p className="text-[11px] font-black uppercase text-slate-500">{tax.responsavel.split(' ')[0]}</p>
                                         </div>
                                     </div>
                                 ))}
+                                {currentItems.length === 0 && !loading && (
+                                    <div className="flex-1 flex items-center justify-center text-slate-400 italic font-medium">
+                                        Nenhum dado retornado da planilha.
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
