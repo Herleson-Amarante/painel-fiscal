@@ -26,8 +26,8 @@
         }
         ::-webkit-scrollbar { display: none; }
         .loading-overlay {
-            background: rgba(243, 244, 246, 0.9);
-            backdrop-filter: blur(8px);
+            background: rgba(243, 244, 246, 0.95);
+            backdrop-filter: blur(12px);
         }
     </style>
 </head>
@@ -35,8 +35,9 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
+        const { useState, useEffect, useCallback, useRef } = React;
 
+        // URL ATUALIZADA PELO USUÁRIO
         const BASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8czDGBw/pub?output=csv";
         
         const CONFIG_COMPETENCIAS = [
@@ -45,24 +46,20 @@
             { id: '135792468', nome: 'Agenda Mar.2026' },
         ];
 
-        // Proxies atualizados para maior compatibilidade
         const PROXIES = [
-            (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+            (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}&t=${Date.now()}`,
             (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-            (url) => url // Tentativa direta como último recurso
+            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
         ];
 
         const ITEMS_PER_PAGE = 5;
         const SECONDS_PER_PAGE = 10; 
-        const FETCH_TIMEOUT = 20000; // Aumentado para 20 segundos
 
         function App() {
             const [currentTime, setCurrentTime] = useState(new Date());
             const [taxes, setTaxes] = useState([]);
             const [meta, setMeta] = useState({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
             const [loading, setLoading] = useState(true);
-            const [proxyIndex, setProxyIndex] = useState(0);
             const [currentPage, setCurrentPage] = useState(0);
             const [isPaused, setIsPaused] = useState(false);
             const [errorMsg, setErrorMsg] = useState(null);
@@ -72,6 +69,7 @@
             });
 
             const parseCSV = (text) => {
+                if (!text || !text.includes(",")) return [];
                 const rows = [];
                 let row = [];
                 let col = "";
@@ -90,41 +88,35 @@
 
             const fetchSheetData = useCallback(async (forcedGid) => {
                 const targetGid = forcedGid || selectedGid;
-                let success = false;
+                let lastError = "";
                 
-                // Itera pelos proxies disponíveis
                 for (let i = 0; i < PROXIES.length; i++) {
-                    const currentIdx = (proxyIndex + i) % PROXIES.length;
                     try {
-                        const csvUrl = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&single=true&cachebuster=${Date.now()}`;
-                        const finalUrl = PROXIES[currentIdx](csvUrl);
-                        
-                        const controller = new AbortController();
-                        const id = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+                        const csvUrl = `${BASE_SPREADSHEET_URL}&gid=${targetGid}`;
+                        const finalUrl = PROXIES[i](csvUrl);
                         
                         const response = await fetch(finalUrl, { 
-                            signal: controller.signal,
-                            headers: { 'Cache-Control': 'no-cache' }
+                            cache: 'no-store',
+                            headers: { 'Pragma': 'no-cache' }
                         });
-                        clearTimeout(id);
                         
                         if (!response.ok) throw new Error(`HTTP ${response.status}`);
                         
                         const text = await response.text();
-                        if (!text || text.length < 100) throw new Error("Documento vazio ou inválido");
+                        if (!text || text.length < 50) throw new Error("Resposta vazia ou inválida");
 
                         const rows = parseCSV(text);
-                        
-                        if (rows.length >= 4) {
-                            setMeta({
-                                qtdTotal: rows[2]?.[1] || '0',
-                                efficiency: rows[2]?.[8] || '0%',
-                                qtdAcessorias: rows[3]?.[1] || '0'
-                            });
-                        }
+                        if (rows.length < 5) throw new Error("Estrutura insuficiente");
 
-                        const rawTaxes = rows.slice(5, 88);
-                        const processed = rawTaxes
+                        // Extração de Metas (B3: Total, I3: Eficiência, B4: Acessórias)
+                        setMeta({
+                            qtdTotal: rows[2]?.[1] || '0',
+                            efficiency: rows[2]?.[8] || '0%',
+                            qtdAcessorias: rows[3]?.[1] || '0'
+                        });
+
+                        // Obrigações começam na linha 6
+                        const processed = rows.slice(5)
                             .filter(row => row[4] && row[4] !== "" && row[4] !== "Obrigação")
                             .map((row, idx) => {
                                 const situacao = (row[6] || "").toLowerCase();
@@ -134,7 +126,7 @@
                                 let urgency = "normal";
                                 if (isDone) urgency = "entregue";
                                 else if (isAtrasado) urgency = "atrasado";
-                                else if (situacao.includes("prazo")) urgency = "alerta";
+                                else if (situacao.includes("prazo") || situacao.includes("atenção")) urgency = "alerta";
 
                                 return {
                                     id: idx,
@@ -151,29 +143,26 @@
                                 };
                             });
 
-                        if (processed.length === 0) throw new Error("Nenhum dado processado");
-
-                        setTaxes(processed);
-                        setLoading(false);
-                        setErrorMsg(null);
-                        setProxyIndex(currentIdx);
-                        success = true;
-                        break; 
+                        if (processed.length > 0) {
+                            setTaxes(processed);
+                            setLoading(false);
+                            setErrorMsg(null);
+                            return; 
+                        }
                     } catch (err) {
-                        console.error(`Falha no proxy ${currentIdx}:`, err.message);
+                        lastError = err.message;
+                        console.warn(`Tentativa ${i} falhou para GID ${targetGid}: ${lastError}`);
                     }
                 }
                 
-                if (!success) {
-                    setErrorMsg("Erro de conexão persistente. Verifique se a planilha está publicada.");
-                    setLoading(false);
-                }
-            }, [proxyIndex, selectedGid]);
+                setErrorMsg(`Erro de carregamento: ${lastError}. Verifique se a planilha está publicada.`);
+                setLoading(false);
+            }, [selectedGid]);
 
             useEffect(() => {
                 fetchSheetData();
                 const clockTimer = setInterval(() => setCurrentTime(new Date()), 1000);
-                const syncTimer = setInterval(() => fetchSheetData(), 45000); // 45s
+                const syncTimer = setInterval(() => fetchSheetData(), 60000); // Sync a cada 1 min
                 return () => { clearInterval(clockTimer); clearInterval(syncTimer); };
             }, [fetchSheetData]);
 
@@ -198,20 +187,14 @@
                 <div className="h-screen flex flex-col p-6 lg:p-8 bg-[#F3F4F6] relative">
                     
                     {(loading && taxes.length === 0) && (
-                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center loading-overlay text-center px-4">
-                            <div className="w-16 h-16 border-4 border-[#FF2A7F] border-t-transparent rounded-full animate-spin mb-4"></div>
-                            <p className="text-[#FF2A7F] font-black uppercase tracking-widest text-xl">
-                                {errorMsg ? "Tentando Reestabelecer..." : "Sincronizando Gocase Tax..."}
-                            </p>
-                            {errorMsg && <p className="text-slate-500 mt-2 text-sm max-w-md">{errorMsg}</p>}
-                            {errorMsg && (
-                                <button 
-                                    onClick={() => { setLoading(true); fetchSheetData(); }}
-                                    className="mt-6 px-6 py-2 bg-black text-white rounded-full font-bold uppercase text-xs tracking-widest hover:bg-[#FF2A7F] transition-colors"
-                                >
-                                    Tentar Novamente Agora
-                                </button>
-                            )}
+                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center loading-overlay">
+                            <div className="w-16 h-16 border-4 border-[#FF2A7F] border-t-transparent rounded-full animate-spin mb-6"></div>
+                            <div className="bg-white px-8 py-4 rounded-3xl shadow-xl border border-slate-100 text-center">
+                                <p className="text-[#FF2A7F] font-black uppercase tracking-widest text-lg">
+                                    Sincronizando com Gocase Tax...
+                                </p>
+                                {errorMsg && <p className="text-slate-400 mt-2 text-xs font-bold max-w-xs">{errorMsg}</p>}
+                            </div>
                         </div>
                     )}
 
@@ -221,14 +204,14 @@
                                 gocase <span className="w-2.5 h-2.5 bg-[#FF2A7F] rounded-full inline-block"></span>
                             </div>
                             <div>
-                                <h1 className="text-2xl font-bold text-slate-800 uppercase tracking-tight">Agenda Tributária</h1>
-                                <p className="text-slate-400 text-sm font-semibold uppercase tracking-widest">Controle 2026</p>
+                                <h1 className="text-2xl font-bold text-slate-800 uppercase tracking-tight leading-none">Agenda Tributária</h1>
+                                <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.2em] mt-1">Dash 2026 • Live Sync</p>
                             </div>
                         </div>
                         
-                        <div className="flex items-center gap-6">
-                            <div className="bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
-                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest">Visualizando</p>
+                        <div className="flex items-center gap-8">
+                            <div className="flex flex-col items-end">
+                                <p className="text-slate-400 text-[9px] font-black uppercase mb-1 tracking-widest">Exibindo Aba</p>
                                 <select 
                                     value={selectedGid}
                                     onChange={(e) => {
@@ -238,7 +221,7 @@
                                         setTaxes([]);
                                         setCurrentPage(0);
                                     }}
-                                    className="bg-transparent border-none text-[#FF2A7F] font-black outline-none cursor-pointer text-base p-0 focus:ring-0 uppercase"
+                                    className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-1.5 text-[#FF2A7F] font-black outline-none cursor-pointer text-sm uppercase transition-all hover:border-[#FF2A7F]"
                                 >
                                     {CONFIG_COMPETENCIAS.map(comp => (
                                         <option key={comp.id} value={comp.id}>{comp.nome}</option>
@@ -246,13 +229,12 @@
                                 </select>
                             </div>
 
-                            <div className="text-right">
-                                <p className="text-slate-400 text-xs font-bold uppercase mb-1 tracking-tighter">Eficiência (I3)</p>
-                                <div className="text-3xl font-black text-[#FF2A7F]">{meta.efficiency}</div>
+                            <div className="text-right border-l border-slate-200 pl-8">
+                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest">Efficiency Rate</p>
+                                <div className="text-4xl font-black text-black tracking-tighter">{meta.efficiency}</div>
                             </div>
 
-                            <div className="w-px h-10 bg-slate-200"></div>
-                            <div className="text-5xl font-black text-black tracking-tighter min-w-[140px] text-center">
+                            <div className="text-5xl font-black text-[#FF2A7F] tracking-tighter min-w-[150px] text-center ml-4">
                                 {currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                             </div>
                         </div>
@@ -261,10 +243,10 @@
                     <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                         
                         <div className="grid grid-cols-4 gap-6 shrink-0">
-                            <SummaryCard title="Total (B3)" value={meta.qtdTotal} color="dark" />
-                            <SummaryCard title="Acessórias (B4)" value={meta.qtdAcessorias} color="pink" />
-                            <SummaryCard title="Concluídas" value={taxes.filter(t => t.isDone).length} color="green" />
-                            <SummaryCard title="Atrasadas" value={taxes.filter(t => t.urgency === 'atrasado').length} color="red" />
+                            <SummaryCard title="Total Compliance" value={meta.qtdTotal} color="dark" />
+                            <SummaryCard title="Acessórias" value={meta.qtdAcessorias} color="pink" />
+                            <SummaryCard title="Entregues" value={taxes.filter(t => t.isDone).length} color="green" />
+                            <SummaryCard title="Em Atraso" value={taxes.filter(t => t.urgency === 'atrasado').length} color="red" />
                         </div>
 
                         <div className="flex-1 bg-white rounded-[2.5rem] overflow-hidden flex flex-col shadow-lg border border-slate-100 relative">
@@ -273,96 +255,92 @@
                                 <div className="absolute top-0 left-0 w-full h-1.5 bg-slate-100 z-20">
                                     <div 
                                         className="h-full bg-[#FF2A7F] transition-all ease-linear"
-                                        style={{ width: `${((currentPage + 1) / totalPages) * 100}%`, transitionDuration: '0.3s' }}
+                                        style={{ width: `${((currentPage + 1) / totalPages) * 100}%`, transitionDuration: '0.4s' }}
                                     ></div>
                                 </div>
                             )}
 
-                            <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-white">
-                                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight flex items-center gap-3">
-                                    <span className="w-2 h-6 bg-black rounded-full"></span>
-                                    Fila de Processamento
-                                </h2>
+                            <div className="px-10 py-6 border-b border-slate-100 flex justify-between items-center bg-white">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-3 h-8 bg-[#FF2A7F] rounded-full"></div>
+                                    <h2 className="text-2xl font-black text-slate-800 uppercase tracking-tight">Obrigações e Cronograma</h2>
+                                </div>
                                 
                                 <div className="flex items-center gap-6">
-                                    <div className="flex items-center bg-slate-100 rounded-2xl p-1 border border-slate-200">
+                                    <div className="flex items-center bg-slate-50 rounded-2xl p-1.5 border border-slate-200">
                                         <button 
                                             onClick={() => { setCurrentPage(prev => (prev > 0 ? prev - 1 : totalPages - 1)); setIsPaused(true); }}
-                                            className="p-2 hover:bg-white rounded-xl transition-all text-slate-400 hover:text-black"
+                                            className="p-2.5 hover:bg-white rounded-xl transition-all text-slate-400"
                                         >
-                                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                                            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
                                         </button>
-                                        
                                         <button 
                                             onClick={() => setIsPaused(!isPaused)} 
-                                            className={`px-4 py-1.5 rounded-xl transition-all font-black text-[10px] uppercase tracking-widest ${
-                                                isPaused ? 'bg-black text-white' : 'bg-white text-[#FF2A7F] shadow-sm'
-                                            }`}
+                                            className={`px-6 py-2 rounded-xl transition-all font-black text-xs uppercase tracking-[0.15em] ${isPaused ? 'bg-black text-white' : 'bg-white text-[#FF2A7F] border border-slate-100'}`}
                                         >
-                                            {isPaused ? 'Pausado' : 'Automático'}
+                                            {isPaused ? 'Manual' : 'Rotação'}
                                         </button>
-
                                         <button 
                                             onClick={() => { setCurrentPage(prev => (prev + 1) % totalPages); setIsPaused(true); }}
-                                            className="p-2 hover:bg-white rounded-xl transition-all text-slate-400 hover:text-black"
+                                            className="p-2.5 hover:bg-white rounded-xl transition-all text-slate-400"
                                         >
-                                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                                            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
                                         </button>
                                     </div>
-                                    <div className="px-5 py-2 bg-slate-800 text-white rounded-xl text-xs font-black">
-                                        Pág {currentPage + 1} / {totalPages}
+                                    <div className="px-6 py-2.5 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest">
+                                        {currentPage + 1} / {totalPages}
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-12 gap-4 px-8 py-4 bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
-                                <div className="col-span-3">Empresa / Regime</div>
-                                <div className="col-span-4">Obrigação / Tipo</div>
+                            <div className="grid grid-cols-12 gap-4 px-10 py-5 bg-slate-50 text-slate-400 text-[11px] font-black uppercase tracking-[0.2em] border-b border-slate-100">
+                                <div className="col-span-3">Entidade / UF</div>
+                                <div className="col-span-4">Obrigação</div>
                                 <div className="col-span-2 text-center">Prazo</div>
                                 <div className="col-span-2 text-center">Situação</div>
-                                <div className="col-span-1 text-right">Responsável</div>
+                                <div className="col-span-1 text-right">Owner</div>
                             </div>
 
-                            <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-start gap-3">
+                            <div className="flex-1 px-6 py-6 overflow-hidden flex flex-col justify-start gap-4">
                                 {currentItems.map((tax, idx) => (
                                     <div 
                                         key={`${tax.id}-${currentPage}`} 
-                                        className={`grid grid-cols-12 gap-4 px-6 py-5 rounded-2xl border shadow-sm items-center animate-slide ${
-                                            tax.isDone ? 'bg-slate-50 border-slate-100 opacity-60' : 'bg-white border-slate-200'
-                                        }`}
-                                        style={{ animationDelay: `${idx * 0.05}s` }}
+                                        className={`grid grid-cols-12 gap-4 px-8 py-6 rounded-[2rem] border shadow-sm items-center animate-slide transition-all ${tax.isDone ? 'bg-slate-50 border-slate-100 opacity-60' : 'bg-white border-slate-200'}`}
+                                        style={{ animationDelay: `${idx * 0.08}s` }}
                                     >
                                         <div className="col-span-3">
-                                            <p className={`text-sm font-bold uppercase truncate ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>
+                                            <p className={`text-[15px] font-black uppercase truncate tracking-tight ${tax.isDone ? 'text-slate-400' : 'text-slate-900'}`}>
                                                 {tax.empresa}
                                             </p>
-                                            <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">{tax.regime} • {tax.uf}</p>
+                                            <p className="text-[11px] font-bold text-slate-400 uppercase mt-1">{tax.regime} • {tax.uf}</p>
                                         </div>
                                         <div className="col-span-4">
-                                            <p className={`text-base font-black uppercase leading-tight truncate ${tax.isDone ? 'text-slate-400 line-through' : 'text-black'}`}>
+                                            <p className={`text-lg font-black uppercase leading-tight truncate tracking-tight ${tax.isDone ? 'text-slate-400' : 'text-black'}`}>
                                                 {tax.nome}
                                             </p>
-                                            <p className="text-[10px] font-bold text-[#FF2A7F] uppercase mt-0.5">{tax.tipo}</p>
+                                            <p className="text-[11px] font-black text-[#FF2A7F] uppercase mt-1 opacity-80">{tax.tipo}</p>
                                         </div>
                                         <div className="col-span-2 text-center">
-                                            <p className={`text-lg font-bold ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>{tax.prazo}</p>
+                                            <p className={`text-2xl font-black tracking-tighter ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>{tax.prazo}</p>
                                         </div>
                                         <div className="col-span-2 flex justify-center">
-                                            <span className={`px-4 py-1.5 rounded-lg font-black text-[10px] uppercase border ${
+                                            <span className={`px-6 py-2.5 rounded-xl font-black text-[11px] uppercase tracking-widest border-2 ${
                                                 tax.isDone ? 'bg-green-50 text-green-600 border-green-100' :
-                                                tax.urgency === 'atrasado' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-yellow-50 text-yellow-600 border-yellow-200'
+                                                tax.urgency === 'atrasado' ? 'bg-red-50 text-red-600 border-red-500 shadow-sm' : 
+                                                tax.urgency === 'alerta' ? 'bg-orange-50 text-orange-600 border-orange-200' :
+                                                'bg-blue-50 text-blue-600 border-blue-100'
                                             }`}>
                                                 {tax.situacao}
                                             </span>
                                         </div>
                                         <div className="col-span-1 text-right">
-                                            <p className="text-[11px] font-black uppercase text-slate-500">{tax.responsavel.split(' ')[0]}</p>
+                                            <p className="text-[12px] font-black uppercase text-slate-800 tracking-tighter">{tax.responsavel.split(' ')[0]}</p>
                                         </div>
                                     </div>
                                 ))}
                                 {currentItems.length === 0 && !loading && (
-                                    <div className="flex-1 flex items-center justify-center text-slate-400 italic font-medium">
-                                        Nenhum dado retornado da planilha.
+                                    <div className="flex-1 flex flex-col items-center justify-center text-slate-300">
+                                        <p className="italic font-bold text-lg">Sem dados para exibir nesta página.</p>
                                     </div>
                                 )}
                             </div>
@@ -377,15 +355,14 @@
                 pink: 'bg-white border-slate-100 text-[#FF2A7F]',
                 dark: 'bg-black border-black text-white',
                 green: 'bg-green-50 border-green-100 text-green-600',
-                red: 'bg-red-50 border-red-100 text-red-500'
+                red: 'bg-red-50 border-red-500 text-red-600'
             };
             const themeClass = themes[color] || themes.pink;
-            const textClassNames = (color === 'dark') ? 'text-slate-400' : 'text-slate-500';
 
             return (
-                <div className={`p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center h-32 ${themeClass}`}>
-                    <span className={`text-[9px] font-bold uppercase tracking-widest mb-1 ${textClassNames}`}>{title}</span>
-                    <div className="text-4xl font-black tracking-tighter">{value}</div>
+                <div className={`p-8 rounded-[2.5rem] border shadow-md flex flex-col justify-center h-40 transition-transform hover:scale-[1.02] ${themeClass}`}>
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] mb-2 text-slate-400">{title}</span>
+                    <div className="text-5xl font-black tracking-tighter leading-none">{value}</div>
                 </div>
             );
         }
