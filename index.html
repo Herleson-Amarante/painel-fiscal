@@ -3,19 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Agenda Tributária Gocase - 2026</title>
+    <title>Gocase Tax | Agenda Tributária</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800;900&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #050505; color: white; margin: 0; overflow: hidden; }
-        .custom-scrollbar::-webkit-scrollbar { width: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: #000; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; border: 2px solid #000; }
-        @keyframes pulse-soft { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
-        .animate-pulse-soft { animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        body { 
+            font-family: 'Montserrat', sans-serif; 
+            background-color: #F3F4F6; 
+            color: #111827; 
+            margin: 0; 
+            overflow: hidden; 
+        }
+        .animate-slide {
+            animation: slideIn 0.5s ease-out forwards;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        ::-webkit-scrollbar { display: none; }
     </style>
 </head>
 <body>
@@ -24,24 +33,48 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback } = React;
 
-        const FINAL_URL = `https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv`;
+        const DEFAULT_URL = `https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv`;
         
+        // ==========================================
+        // MENU DE COMPETÊNCIAS (MESES)
+        // Adicione aqui os links de cada aba. O sistema vai "fixar" na escolha do usuário.
+        // ==========================================
+        const CONFIG_COMPETENCIAS = [
+            { id: 'default', nome: 'Mês Atual (Automático)', url: DEFAULT_URL },
+            // Para adicionar novos meses, desative o comentário abaixo e coloque o link CSV da aba:
+            // { id: 'jan2026', nome: 'Janeiro/2026', url: 'COLE_O_LINK_AQUI' },
+            // { id: 'fev2026', nome: 'Fevereiro/2026', url: 'COLE_O_LINK_AQUI' },
+            // { id: 'mar2026', nome: 'Março/2026', url: 'COLE_O_LINK_AQUI' },
+        ];
+
         const PROXIES = [
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
             (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
         ];
 
+        const ITEMS_PER_PAGE = 5;
+        const SECONDS_PER_PAGE = 10;
+
         function App() {
             const [currentTime, setCurrentTime] = useState(new Date());
             const [taxes, setTaxes] = useState([]);
-            const [meta, setMeta] = useState({ competence: '...', total: 0, efficiency: '0%' });
+            const [meta, setMeta] = useState({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
             const [loading, setLoading] = useState(true);
             const [proxyIndex, setProxyIndex] = useState(0);
+            const [currentPage, setCurrentPage] = useState(0);
+            const [isPaused, setIsPaused] = useState(false); // Fixar/Pausar a página
+
+            // Puxar a competência salva da memória (ou usar o padrão)
+            const [selectedCompetenceId, setSelectedCompetenceId] = useState(() => {
+                return localStorage.getItem('gocase_competence') || 'default';
+            });
 
             const fetchSheetData = useCallback(async () => {
-                setLoading(true);
                 try {
-                    const fetchUrl = PROXIES[proxyIndex](FINAL_URL);
+                    // Pega o URL baseado na competência selecionada
+                    const currentCompObj = CONFIG_COMPETENCIAS.find(c => c.id === selectedCompetenceId) || CONFIG_COMPETENCIAS[0];
+                    const fetchUrl = PROXIES[proxyIndex](currentCompObj.url);
+                    
                     const response = await fetch(fetchUrl);
                     if (!response.ok) throw new Error('Falha na rede');
                     const csvText = await response.text();
@@ -50,41 +83,66 @@
                         return row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
                     });
 
-                    // Captura Metadados das células específicas
-                    // Linha 3 (Index 2 no JS): Competência (Col B = Index 1), Eficiência (Col H = Index 7)
-                    // Linha 4 (Index 3 no JS): Total (Col B = Index 1)
                     if (rows.length >= 4) {
                         setMeta({
-                            competence: rows[2]?.[1] || '---',
-                            efficiency: rows[2]?.[7] || '0%',
-                            total: rows[3]?.[1] || '0'
+                            qtdTotal: rows[2]?.[1] || '0',
+                            efficiency: rows[2]?.[8] || '0%',
+                            qtdAcessorias: rows[3]?.[1] || '0'
                         });
                     }
 
-                    // Processa apenas Linhas 5 a 88 (Index 4 a 87 no JS)
-                    const targetData = rows.slice(4, 88);
+                    const targetData = rows.slice(5, 88);
+                    const today = new Date();
+                    today.setHours(0,0,0,0);
+
                     const parsedData = targetData
-                        .filter(cols => cols[3] && cols[3] !== "") // Só linhas com nome de obrigação
-                        .map((cols, index) => ({
-                            id: index,
-                            empresa: cols[0] || '-',
-                            regime: cols[1] || '-',
-                            tipo: cols[2] || '-',
-                            name: cols[3] || 'Obrigação',
-                            prazo: cols[4] || '---',
-                            situacao: cols[5] || '-',
-                            responsible: cols[6] || 'Equipe',
-                            status: (cols[7] || 'pendente').toLowerCase()
-                        }));
+                        .filter(cols => cols[4] && cols[4] !== "") 
+                        .map((cols, index) => {
+                            const item = {
+                                id: index,
+                                empresa: cols[0] || '-',
+                                uf: cols[1] || '-',
+                                regime: cols[2] || '-',
+                                tipo: cols[3] || '-',
+                                name: cols[4] || 'Obrigação',
+                                prazo: cols[5] || '---',
+                                situacao: cols[6] || '-',
+                                responsible: cols[7] || 'Equipe',
+                                status: (cols[8] || 'pendente').toLowerCase()
+                            };
+
+                            let diffDays = 999;
+                            if (item.prazo && item.prazo.includes('/')) {
+                                const [d, m, y] = item.prazo.split('/');
+                                const fullYear = y && y.length === 2 ? `20${y}` : y;
+                                const dueDate = new Date(fullYear, m - 1, d);
+                                if (!isNaN(dueDate.getTime())) {
+                                    const diffTime = dueDate.getTime() - today.getTime();
+                                    diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                                }
+                            }
+
+                            let urgency = 'normal';
+                            const isDone = item.status.includes('pago') || item.status.includes('conclu') || item.status.includes('entregue');
+                            
+                            if (!isDone) {
+                                if (diffDays < 0) urgency = 'atrasado';
+                                else if (diffDays <= 2) urgency = 'alerta';
+                            } else {
+                                urgency = 'entregue';
+                            }
+
+                            return { ...item, diffDays, urgency };
+                        });
                     
                     setTaxes(parsedData);
+                    setLoading(false);
                 } catch (err) {
                     setProxyIndex((prev) => (prev + 1) % PROXIES.length);
-                } finally {
-                    setLoading(false);
                 }
-            }, [proxyIndex]);
+            }, [proxyIndex, selectedCompetenceId]);
 
+            // Timer de Busca
             useEffect(() => {
                 fetchSheetData();
                 const dataTimer = setInterval(fetchSheetData, 60000);
@@ -92,85 +150,205 @@
                 return () => { clearInterval(dataTimer); clearInterval(clockTimer); };
             }, [fetchSheetData]);
 
-            const getStatusColor = (status) => {
-                if (status.includes('pago') || status.includes('conclu') || status.includes('entregue')) return 'pago';
-                if (status.includes('atraso')) return 'atrasado';
-                return 'pendente';
+            const criticalItems = taxes.filter(t => t.urgency === 'atrasado' || t.urgency === 'alerta');
+            const totalPages = Math.ceil(criticalItems.length / ITEMS_PER_PAGE) || 1;
+
+            // Corrige a página se o total diminuir
+            useEffect(() => {
+                if (currentPage >= totalPages) setCurrentPage(0);
+            }, [totalPages, currentPage]);
+
+            // Lógica de Paginação (Rotaciona se NÃO estiver pausado)
+            useEffect(() => {
+                if (totalPages <= 1 || isPaused) return;
+                const pageTimer = setInterval(() => {
+                    setCurrentPage(prev => (prev + 1) % totalPages);
+                }, SECONDS_PER_PAGE * 1000);
+                return () => clearInterval(pageTimer);
+            }, [totalPages, isPaused, criticalItems.length]);
+
+            // Trocar e Fixar a Competência
+            const handleCompetenceChange = (e) => {
+                const newId = e.target.value;
+                setSelectedCompetenceId(newId);
+                localStorage.setItem('gocase_competence', newId); // Salva no navegador (Fixa)
+                setCurrentPage(0);
+                setLoading(true);
             };
 
+            const currentDisplayItems = criticalItems.slice(
+                currentPage * ITEMS_PER_PAGE, 
+                (currentPage + 1) * ITEMS_PER_PAGE
+            );
+
             return (
-                <div className="h-screen flex flex-col p-6 lg:p-10 bg-[#020202]">
-                    <header className="flex justify-between items-center mb-6 bg-zinc-900/40 p-6 rounded-[2rem] border border-zinc-800/50 relative overflow-hidden">
-                        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#FF4DAD] via-[#A855F7] to-[#00D4FF]"></div>
-                        <div className="flex items-center gap-6">
-                            <div className="w-16 h-16 bg-gradient-to-br from-[#FF4DAD] to-[#A855F7] rounded-2xl flex items-center justify-center">
-                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><path d="M12 2v20M2 12h20M12 2l10 10-10 10L2 12z"/></svg>
+                <div className="h-screen flex flex-col p-6 lg:p-8 bg-[#F3F4F6]">
+                    
+                    <header className="flex justify-between items-center mb-6 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 relative">
+                        <div className="flex items-center gap-4">
+                            <div className="bg-black text-white px-6 py-3 rounded-full font-black text-3xl tracking-tighter flex items-center gap-2">
+                                gocase <span className="w-3 h-3 bg-[#FF2A7F] rounded-full inline-block mb-1"></span>
                             </div>
+                            <div className="h-10 w-px bg-slate-200 mx-2"></div>
                             <div>
-                                <h1 className="text-4xl font-black text-white uppercase italic leading-none">GOCASE <span className="text-[#FF4DAD]">TAX</span></h1>
-                                <p className="text-zinc-500 text-lg font-bold uppercase mt-1 tracking-wider">Comp: {meta.competence}</p>
+                                <h1 className="text-2xl font-bold text-slate-800 uppercase tracking-tight">Agenda Tributária</h1>
+                                <p className="text-slate-400 text-sm font-semibold tracking-widest uppercase">Monitoramento 2026</p>
                             </div>
                         </div>
-                        <div className="text-right flex items-center gap-8">
-                            <div>
-                                <p className="text-zinc-500 text-xs font-black uppercase mb-1">Status de Entrega</p>
-                                <div className="text-4xl font-black text-emerald-400 italic leading-none">{meta.efficiency}</div>
+                        
+                        <div className="text-right flex items-center gap-6">
+                            
+                            {/* SELETOR DE COMPETÊNCIA */}
+                            <div className="flex flex-col justify-center bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
+                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest text-left">Competência</p>
+                                <select 
+                                    value={selectedCompetenceId}
+                                    onChange={handleCompetenceChange}
+                                    className="bg-transparent border-none text-[#FF2A7F] font-black outline-none cursor-pointer text-sm p-0 focus:ring-0 uppercase tracking-tight"
+                                >
+                                    {CONFIG_COMPETENCIAS.map(comp => (
+                                        <option key={comp.id} value={comp.id} className="text-slate-800 font-bold">{comp.nome}</option>
+                                    ))}
+                                </select>
                             </div>
-                            <div className="w-px h-12 bg-zinc-800"></div>
-                            <div className="text-6xl font-mono font-black text-white tracking-tighter leading-none italic">
+
+                            <div className="flex gap-6">
+                                <div className="text-right">
+                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">Acessórias</p>
+                                    <div className="text-2xl font-black text-slate-800">{meta.qtdAcessorias}</div>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">Total Entregue</p>
+                                    <div className="text-2xl font-black text-[#FF2A7F]">{meta.efficiency}</div>
+                                </div>
+                            </div>
+                            <div className="w-px h-10 bg-slate-200"></div>
+                            <div className="text-5xl font-black text-black tracking-tighter">
                                 {currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                             </div>
                         </div>
                     </header>
 
                     <div className="flex-1 flex flex-col gap-6 overflow-hidden">
+                        
                         <div className="grid grid-cols-4 gap-6 shrink-0">
-                            <Card title="Eficiência (H3)" value={meta.efficiency} color="emerald" />
-                            <Card title="Total Obrigações (B4)" value={meta.total} color="blue" />
-                            <Card title="Pendentes" value={taxes.filter(t => getStatusColor(t.status) === 'pendente').length} color="yellow" />
-                            <Card title="Atrasadas" value={taxes.filter(t => getStatusColor(t.status) === 'atrasado').length} color="red" pulse={taxes.some(t => getStatusColor(t.status) === 'atrasado')} />
+                            <SummaryCard title="Eficiência (I3)" value={meta.efficiency} color="pink" />
+                            <SummaryCard title="Total de Obrigações (B3)" value={meta.qtdTotal} color="dark" />
+                            <SummaryCard title="Atenção (2 dias)" value={taxes.filter(t => t.urgency === 'alerta').length} color="yellow" />
+                            <SummaryCard title="Atrasadas" value={taxes.filter(t => t.urgency === 'atrasado').length} color="red" />
                         </div>
 
-                        <div className="flex-1 bg-zinc-900/10 border border-zinc-800/40 rounded-[2.5rem] overflow-hidden flex flex-col shadow-2xl backdrop-blur-md">
-                            <div className="grid grid-cols-12 gap-4 px-10 py-4 bg-zinc-800/20 text-zinc-500 text-xs font-black uppercase tracking-widest border-b border-zinc-800/40 italic">
-                                <div className="col-span-3">Empresa / Tipo</div>
-                                <div className="col-span-3">Obrigação Tributária</div>
+                        <div className="flex-1 bg-white rounded-[2.5rem] overflow-hidden flex flex-col shadow-lg border border-slate-100 relative">
+                            
+                            {!isPaused && totalPages > 1 && (
+                                <div className="absolute top-0 left-0 w-full h-1 bg-slate-100">
+                                    <div 
+                                        className="h-full bg-[#FF2A7F] transition-all ease-linear"
+                                        style={{ width: `${((currentPage + 1) / totalPages) * 100}%`, transitionDuration: '0.3s' }}
+                                    ></div>
+                                </div>
+                            )}
+
+                            <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-white">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
+                                        <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                    </div>
+                                    <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Atenção Necessária</h2>
+                                    {loading && <span className="text-xs font-bold text-slate-400 animate-pulse ml-4">Sincronizando aba...</span>}
+                                </div>
+                                
+                                {/* CONTROLES DE PAGINAÇÃO (PAUSA E NAVEGAÇÃO) */}
+                                <div className="flex items-center gap-4">
+                                    {totalPages > 1 && (
+                                        <div className="flex items-center bg-slate-100 rounded-xl p-1 shadow-inner">
+                                            <button 
+                                                onClick={() => { setCurrentPage(prev => prev > 0 ? prev - 1 : totalPages - 1); setIsPaused(true); }} 
+                                                className="p-2 text-slate-500 hover:bg-white rounded-lg transition-all" title="Página Anterior">
+                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/></svg>
+                                            </button>
+                                            <button 
+                                                onClick={() => setIsPaused(!isPaused)} 
+                                                className={`p-2 rounded-lg transition-all font-bold text-xs uppercase flex items-center gap-1 ${isPaused ? 'bg-[#FF2A7F] text-white shadow-md' : 'text-slate-500 hover:bg-white'}`} 
+                                                title={isPaused ? "Retomar Rotação" : "Fixar/Pausar Página"}>
+                                                {isPaused ? 
+                                                    <><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg> Fixado</> : 
+                                                    <><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg> Pausar</>
+                                                }
+                                            </button>
+                                            <button 
+                                                onClick={() => { setCurrentPage(prev => (prev + 1) % totalPages); setIsPaused(true); }} 
+                                                className="p-2 text-slate-500 hover:bg-white rounded-lg transition-all" title="Próxima Página">
+                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                                            </button>
+                                        </div>
+                                    )}
+                                    <div className="px-5 py-2 bg-slate-100 text-slate-600 rounded-full text-sm font-bold shadow-inner">
+                                        Pág {currentPage + 1} de {totalPages}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-12 gap-4 px-8 py-4 bg-slate-50 text-slate-400 text-xs font-black uppercase tracking-widest border-b border-slate-100">
+                                <div className="col-span-3">Empresa / UF</div>
+                                <div className="col-span-3">Obrigação</div>
                                 <div className="col-span-2 text-center">Prazo</div>
-                                <div className="col-span-2 text-center">Status</div>
+                                <div className="col-span-2 text-center">Situação</div>
                                 <div className="col-span-2 text-right">Responsável</div>
                             </div>
 
-                            <div className="flex-1 overflow-y-auto px-4 py-2 custom-scrollbar">
-                                <div className="flex flex-col gap-2">
-                                    {taxes.length > 0 ? (
-                                        taxes.map((tax) => {
-                                            const statusType = getStatusColor(tax.status);
-                                            return (
-                                                <div key={tax.id} className="grid grid-cols-12 gap-4 px-8 py-4 bg-zinc-900/40 rounded-[1.2rem] border border-zinc-800/30 items-center transition-all">
-                                                    <div className="col-span-3">
-                                                        <p className="text-lg font-bold text-white uppercase truncate">{tax.empresa}</p>
-                                                        <p className="text-zinc-600 text-[10px] font-black uppercase">{tax.regime} • {tax.tipo}</p>
+                            <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-center">
+                                {criticalItems.length > 0 ? (
+                                    <div className="flex flex-col gap-3">
+                                        {currentDisplayItems.map((tax, idx) => (
+                                            <div 
+                                                key={`${tax.id}-${currentPage}`} 
+                                                className="grid grid-cols-12 gap-4 px-6 py-5 bg-white rounded-2xl border border-slate-100 shadow-sm items-center animate-slide"
+                                                style={{ animationDelay: `${idx * 0.1}s` }}
+                                            >
+                                                <div className="col-span-3">
+                                                    <p className="text-base font-bold text-slate-800 uppercase truncate">{tax.empresa}</p>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                        <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-bold">{tax.uf}</span>
+                                                        <span className="text-slate-400 text-[10px] font-bold uppercase truncate">{tax.regime}</span>
                                                     </div>
-                                                    <div className="col-span-3">
-                                                        <p className="text-xl font-black text-zinc-200 uppercase leading-tight">{tax.name}</p>
-                                                        <p className="text-[#A855F7] text-[10px] font-bold uppercase">{tax.situacao}</p>
-                                                    </div>
-                                                    <div className="col-span-2 text-center text-2xl font-mono font-black text-zinc-400">
-                                                        {tax.prazo}
-                                                    </div>
-                                                    <div className="col-span-2 flex justify-center">
-                                                        <Badge status={statusType} label={tax.status} />
-                                                    </div>
-                                                    <div className="col-span-2 text-right text-sm font-black text-zinc-500 italic uppercase underline decoration-[#FF4DAD] underline-offset-4">{tax.responsible}</div>
                                                 </div>
-                                            );
-                                        })
-                                    ) : (
-                                        <div className="flex flex-col items-center justify-center h-full opacity-20">
-                                            <p className="text-2xl font-black italic uppercase">Buscando dados linha 5-88...</p>
-                                        </div>
-                                    )}
-                                </div>
+                                                <div className="col-span-3">
+                                                    <p className="text-lg font-black text-black uppercase leading-tight truncate">{tax.name}</p>
+                                                    <p className="text-[#FF2A7F] text-xs font-bold uppercase truncate mt-0.5">{tax.tipo}</p>
+                                                </div>
+                                                <div className="col-span-2 text-center">
+                                                    <p className="text-xl font-bold text-slate-800">{tax.prazo}</p>
+                                                    <p className={`text-[10px] font-black uppercase mt-1 ${tax.urgency === 'atrasado' ? 'text-red-500' : 'text-yellow-500'}`}>
+                                                        {tax.diffDays < 0 ? `${Math.abs(tax.diffDays)} dias atrasado` : tax.diffDays === 0 ? 'Vence Hoje' : `Em ${tax.diffDays} dias`}
+                                                    </p>
+                                                </div>
+                                                <div className="col-span-2 flex justify-center">
+                                                    <span className={`px-4 py-1.5 rounded-lg font-black text-xs uppercase tracking-wider border ${
+                                                        tax.urgency === 'atrasado' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-yellow-50 text-yellow-600 border-yellow-200'
+                                                    }`}>
+                                                        {tax.situacao || tax.status}
+                                                    </span>
+                                                </div>
+                                                <div className="col-span-2 text-right">
+                                                    <p className="text-sm font-black text-slate-600 uppercase">{tax.responsible}</p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="flex flex-col items-center justify-center h-full">
+                                        {!loading && (
+                                            <>
+                                                <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6">
+                                                    <svg className="w-12 h-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+                                                </div>
+                                                <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-2">Tudo em dia!</h3>
+                                                <p className="text-slate-500 font-medium">Nenhuma obrigação atrasada ou vencendo nos próximos 2 dias.</p>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -178,31 +356,21 @@
             );
         }
 
-        function Card({ title, value, color, pulse }) {
-            const colors = {
-                emerald: 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5',
-                blue: 'text-blue-400 border-blue-500/20 bg-blue-500/5',
-                yellow: 'text-yellow-400 border-yellow-500/20 bg-yellow-500/5',
-                red: 'text-red-500 border-red-500/20 bg-red-500/5'
+        function SummaryCard({ title, value, color }) {
+            const themes = {
+                pink: 'bg-white border-slate-100 text-[#FF2A7F]',
+                dark: 'bg-black border-black text-white',
+                yellow: 'bg-white border-slate-100 text-yellow-500',
+                red: 'bg-red-50 border-red-100 text-red-500'
             };
-            return (
-                <div className={`p-4 rounded-[1.5rem] border ${colors[color]} flex flex-col justify-center h-32 relative ${pulse ? 'animate-pulse-soft' : ''}`}>
-                    <span className="text-[10px] font-black uppercase opacity-60 tracking-tighter italic mb-1">{title}</span>
-                    <div className="text-5xl font-black tracking-tighter italic leading-none">{value}</div>
-                </div>
-            );
-        }
+            const themeClass = themes[color] || themes.pink;
+            const textClassNames = color === 'dark' ? 'text-slate-400' : 'text-slate-500';
 
-        function Badge({ status, label }) {
-            const styles = {
-                pago: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
-                atrasado: 'bg-red-500/10 text-red-500 border-red-500/20 animate-pulse',
-                pendente: 'bg-zinc-800 text-zinc-400 border-zinc-700'
-            };
             return (
-                <span className={`px-4 py-1 rounded-lg font-black text-[10px] border tracking-widest uppercase ${styles[status]}`}>
-                    {label}
-                </span>
+                <div className={`p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center h-36 ${themeClass}`}>
+                    <span className={`text-xs font-bold uppercase tracking-widest mb-2 ${textClassNames}`}>{title}</span>
+                    <div className="text-5xl font-black tracking-tighter">{value}</div>
+                </div>
             );
         }
 
