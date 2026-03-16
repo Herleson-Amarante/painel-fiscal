@@ -35,32 +35,29 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback, useRef } = React;
+        const { useState, useEffect, useCallback } = React;
 
         const BASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8czDGBw/pub?output=csv";
         
         const CONFIG_COMPETENCIAS = [
-            { id: '0', nome: 'Agenda Jan.2026' },
             { id: '802166840', nome: 'Agenda Fev.2026' },
+            { id: '0', nome: 'Agenda Jan.2026' },
             { id: '135792468', nome: 'Agenda Mar.2026' },
         ];
 
         const PROXIES = [
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-            (url) => `https://thingproxy.freeboard.io/fetch/${url}`
+            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
         ];
 
         const ITEMS_PER_PAGE = 5;
         const SECONDS_PER_PAGE = 10; 
-        const REQUEST_TIMEOUT = 15000;
 
         function App() {
             const [currentTime, setCurrentTime] = useState(new Date());
             const [taxes, setTaxes] = useState([]);
             const [meta, setMeta] = useState({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
             const [loading, setLoading] = useState(true);
-            const [errorMsg, setErrorMsg] = useState(null);
             const [proxyIndex, setProxyIndex] = useState(0);
             const [currentPage, setCurrentPage] = useState(0);
             const [isPaused, setIsPaused] = useState(false);
@@ -69,103 +66,73 @@
                 return localStorage.getItem('gocase_selected_gid') || CONFIG_COMPETENCIAS[0].id;
             });
 
-            const fetchWithTimeout = async (url, options = {}, timeout = REQUEST_TIMEOUT) => {
-                const controller = new AbortController();
-                const id = setTimeout(() => controller.abort(), timeout);
-                try {
-                    const response = await fetch(url, { ...options, signal: controller.signal });
-                    clearTimeout(id);
-                    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
-                    return await response.text();
-                } catch (err) {
-                    clearTimeout(id);
-                    throw err;
-                }
-            };
-
             const fetchSheetData = useCallback(async (forcedGid) => {
                 const targetGid = forcedGid || selectedGid;
-                let success = false;
                 let currentTryProxy = proxyIndex;
 
-                for (let i = 0; i < PROXIES.length; i++) {
-                    try {
-                        const fetchUrlWithGid = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&single=true&t=${Date.now()}`;
-                        const fetchUrl = PROXIES[currentTryProxy](fetchUrlWithGid);
-                        
-                        const csvText = await fetchWithTimeout(fetchUrl);
-                        
-                        const rows = csvText.split(/\r?\n/).map(row => {
-                            return row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
+                try {
+                    const fetchUrlWithGid = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&single=true&t=${Date.now()}`;
+                    const fetchUrl = PROXIES[currentTryProxy](fetchUrlWithGid);
+                    
+                    const response = await fetch(fetchUrl);
+                    const csvText = await response.text();
+                    
+                    const rows = csvText.split(/\r?\n/).map(row => {
+                        return row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
+                    });
+
+                    // MAPEAMENTO ESPECÍFICO CONFORME SOLICITADO
+                    // Coluna I (índice 8), Linha 3 (índice 2) -> Eficiência
+                    // Coluna B (índice 1), Linha 3 (índice 2) -> Qtd Total
+                    // Coluna B (índice 1), Linha 4 (índice 3) -> Qtd Acessórias
+                    if (rows.length >= 4) {
+                        setMeta({
+                            qtdTotal: rows[2]?.[1] || '0',
+                            efficiency: rows[2]?.[8] || '0%',
+                            qtdAcessorias: rows[3]?.[1] || '0'
                         });
-
-                        if (rows.length >= 4) {
-                            setMeta({
-                                qtdTotal: rows[2]?.[1] || '0',
-                                efficiency: rows[2]?.[8] || '0%',
-                                qtdAcessorias: rows[3]?.[1] || '0'
-                            });
-                        }
-
-                        const targetData = rows.slice(5, 200); 
-                        const today = new Date();
-                        today.setHours(0,0,0,0);
-
-                        const parsedData = targetData
-                            .filter(cols => cols[4] && cols[4] !== "" && cols[4] !== "Obrigações") 
-                            .map((cols, index) => {
-                                const statusValue = (cols[8] || '').toLowerCase();
-                                const isDone = statusValue.includes('pago') || statusValue.includes('conclu') || statusValue.includes('entregue') || statusValue.includes('ok');
-
-                                const item = {
-                                    id: index,
-                                    empresa: cols[0] || '-',
-                                    uf: cols[1] || '-',
-                                    regime: cols[2] || '-',
-                                    tipo: cols[3] || '-',
-                                    name: cols[4] || 'Obrigação',
-                                    prazo: cols[5] || '---',
-                                    situacao: cols[6] || '-',
-                                    responsible: cols[7] || 'Equipe',
-                                    status: statusValue,
-                                    isDone: isDone
-                                };
-
-                                let diffDays = 999;
-                                if (item.prazo && item.prazo.includes('/')) {
-                                    const [d, m, y] = item.prazo.split('/');
-                                    const fullYear = y && y.length === 2 ? `20${y}` : y;
-                                    const dueDate = new Date(fullYear, m - 1, d);
-                                    if (!isNaN(dueDate.getTime())) {
-                                        const diffTime = dueDate.getTime() - today.getTime();
-                                        diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                                    }
-                                }
-
-                                let urgency = 'normal';
-                                if (isDone) {
-                                    urgency = 'entregue';
-                                } else {
-                                    if (diffDays < 0) urgency = 'atrasado';
-                                    else if (diffDays <= 2) urgency = 'alerta';
-                                }
-
-                                return { ...item, diffDays, urgency };
-                            });
-                        
-                        setTaxes(parsedData);
-                        setLoading(false);
-                        setErrorMsg(null);
-                        success = true;
-                        setProxyIndex(currentTryProxy);
-                        break; 
-                    } catch (err) {
-                        currentTryProxy = (currentTryProxy + 1) % PROXIES.length;
                     }
-                }
 
-                if (!success) {
-                    setErrorMsg("Conexão instável. Tentando reconectar...");
+                    // Dados das Obrigações: Linha 6 (índice 5) até Linha 88 (índice 87)
+                    const targetData = rows.slice(5, 88); 
+                    const today = new Date();
+                    today.setHours(0,0,0,0);
+
+                    const parsedData = targetData
+                        .filter(cols => cols[4] && cols[4] !== "") // Coluna E (índice 4) é a Obrigação
+                        .map((cols, index) => {
+                            // Coluna G (índice 6) -> Situação (Concluído, No prazo, Atrasado)
+                            const situacaoStr = (cols[6] || '').toLowerCase();
+                            const isDone = situacaoStr.includes('conclu') || situacaoStr.includes('pago') || situacaoStr.includes('ok');
+                            const isAtrasado = situacaoStr.includes('atrasado');
+
+                            const item = {
+                                id: index,
+                                empresa: cols[0] || '-',    // Coluna A
+                                uf: cols[1] || '-',         // Coluna B
+                                regime: cols[2] || '-',     // Coluna C
+                                tipo: cols[3] || '-',       // Coluna D
+                                name: cols[4] || '-',       // Coluna E
+                                prazo: cols[5] || '-',      // Coluna F
+                                situacao: cols[6] || '-',   // Coluna G
+                                responsible: cols[7] || '-', // Coluna H
+                                isDone: isDone,
+                                isAtrasado: isAtrasado
+                            };
+
+                            let urgency = 'normal';
+                            if (isDone) urgency = 'entregue';
+                            else if (isAtrasado) urgency = 'atrasado';
+                            else if (item.situacao.toLowerCase().includes('prazo')) urgency = 'alerta';
+
+                            return { ...item, urgency };
+                        });
+                    
+                    setTaxes(parsedData);
+                    setLoading(false);
+                } catch (err) {
+                    console.error("Erro na busca:", err);
+                    setProxyIndex((proxyIndex + 1) % PROXIES.length);
                 }
             }, [proxyIndex, selectedGid]);
 
@@ -176,7 +143,6 @@
                 return () => { clearInterval(dataTimer); clearInterval(clockTimer); };
             }, [fetchSheetData]);
 
-            // ORDENAÇÃO: Atrasados -> Alerta -> No Prazo -> Entregues
             const sortedItems = [...taxes].sort((a, b) => {
                 const order = { 'atrasado': 0, 'alerta': 1, 'normal': 2, 'entregue': 3 };
                 return order[a.urgency] - order[b.urgency];
@@ -184,14 +150,11 @@
 
             const totalPages = Math.ceil(sortedItems.length / ITEMS_PER_PAGE) || 1;
 
-            // Loop de Paginação Automática
             useEffect(() => {
                 if (isPaused || loading || totalPages <= 1) return;
-                
                 const timer = setInterval(() => {
                     setCurrentPage(prev => (prev + 1) % totalPages);
                 }, SECONDS_PER_PAGE * 1000);
-                
                 return () => clearInterval(timer);
             }, [isPaused, loading, totalPages]);
 
@@ -216,52 +179,42 @@
                     {loading && taxes.length === 0 && (
                         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center loading-overlay">
                             <div className="w-16 h-16 border-4 border-[#FF2A7F] border-t-transparent rounded-full animate-spin mb-4"></div>
-                            <p className="text-[#FF2A7F] font-black uppercase tracking-widest animate-pulse text-xl text-center px-10">
-                                {errorMsg ? errorMsg : `Sincronizando Agenda 2026...`}
-                            </p>
+                            <p className="text-[#FF2A7F] font-black uppercase tracking-widest text-xl">Sincronizando Gocase Tax...</p>
                         </div>
                     )}
 
                     <header className="flex justify-between items-center mb-6 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100">
                         <div className="flex items-center gap-4">
-                            <div className="bg-black text-white px-6 py-3 rounded-full font-black text-3xl tracking-tighter flex items-center gap-2">
-                                gocase <span className="w-3 h-3 bg-[#FF2A7F] rounded-full inline-block mb-1"></span>
+                            <div className="bg-black text-white px-6 py-3 rounded-full font-black text-3xl tracking-tighter">
+                                gocase <span className="w-2.5 h-2.5 bg-[#FF2A7F] rounded-full inline-block"></span>
                             </div>
-                            <div className="h-10 w-px bg-slate-200 mx-2"></div>
                             <div>
                                 <h1 className="text-2xl font-bold text-slate-800 uppercase tracking-tight">Agenda Tributária</h1>
-                                <p className="text-slate-400 text-sm font-semibold tracking-widest uppercase">Monitoramento em Tempo Real</p>
+                                <p className="text-slate-400 text-sm font-semibold uppercase tracking-widest">Dashboard 2026</p>
                             </div>
                         </div>
                         
-                        <div className="text-right flex items-center gap-6">
-                            <div className="flex flex-col justify-center bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 shadow-sm min-w-[220px]">
-                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest text-left">Competência</p>
+                        <div className="flex items-center gap-6">
+                            <div className="bg-slate-50 px-4 py-2 rounded-xl border border-slate-200">
+                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest">Aba Atual</p>
                                 <select 
                                     value={selectedGid}
                                     onChange={handleCompetenceChange}
-                                    className="bg-transparent border-none text-[#FF2A7F] font-black outline-none cursor-pointer text-base p-0 focus:ring-0 uppercase tracking-tight"
+                                    className="bg-transparent border-none text-[#FF2A7F] font-black outline-none cursor-pointer text-base p-0 focus:ring-0 uppercase"
                                 >
                                     {CONFIG_COMPETENCIAS.map(comp => (
-                                        <option key={comp.id} value={comp.id} className="text-slate-800 font-bold">{comp.nome}</option>
+                                        <option key={comp.id} value={comp.id}>{comp.nome}</option>
                                     ))}
                                 </select>
                             </div>
 
-                            <div className="flex gap-6">
-                                <div className="text-right">
-                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">Pendentes</p>
-                                    <div className="text-2xl font-black text-slate-800">
-                                        {taxes.filter(t => !t.isDone).length}
-                                    </div>
-                                </div>
-                                <div className="text-right">
-                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">Eficiência</p>
-                                    <div className="text-2xl font-black text-[#FF2A7F]">{meta.efficiency}</div>
-                                </div>
+                            <div className="text-right">
+                                <p className="text-slate-400 text-xs font-bold uppercase mb-1 tracking-tighter">Eficiência Global</p>
+                                <div className="text-3xl font-black text-[#FF2A7F]">{meta.efficiency}</div>
                             </div>
+
                             <div className="w-px h-10 bg-slate-200"></div>
-                            <div className="text-5xl font-black text-black tracking-tighter min-w-[150px]">
+                            <div className="text-5xl font-black text-black tracking-tighter min-w-[140px] text-center">
                                 {currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                             </div>
                         </div>
@@ -270,17 +223,16 @@
                     <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                         
                         <div className="grid grid-cols-4 gap-6 shrink-0">
-                            <SummaryCard title="Progresso da Aba" value={meta.efficiency} color="pink" />
-                            <SummaryCard title="Total na Planilha" value={meta.qtdTotal} color="dark" />
-                            <SummaryCard title="Já Entregues" value={taxes.filter(t => t.isDone).length} color="green" />
+                            <SummaryCard title="Total Obrigações (B3)" value={meta.qtdTotal} color="dark" />
+                            <SummaryCard title="Acessórias (B4)" value={meta.qtdAcessorias} color="pink" />
+                            <SummaryCard title="Concluídas" value={taxes.filter(t => t.isDone).length} color="green" />
                             <SummaryCard title="Em Atraso" value={taxes.filter(t => t.urgency === 'atrasado').length} color="red" />
                         </div>
 
                         <div className="flex-1 bg-white rounded-[2.5rem] overflow-hidden flex flex-col shadow-lg border border-slate-100 relative">
                             
-                            {/* Barra de Progresso da Paginação */}
                             {!isPaused && totalPages > 1 && (
-                                <div className="absolute top-0 left-0 w-full h-1 bg-slate-100 z-20">
+                                <div className="absolute top-0 left-0 w-full h-1.5 bg-slate-100 z-20">
                                     <div 
                                         className="h-full bg-[#FF2A7F] transition-all ease-linear"
                                         style={{ width: `${((currentPage + 1) / totalPages) * 100}%`, transitionDuration: '0.3s' }}
@@ -289,128 +241,88 @@
                             )}
 
                             <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-white">
-                                <div className="flex items-center gap-3">
-                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center bg-slate-100`}>
-                                        <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 6h16M4 12h16m-7 6h7"></path>
-                                        </svg>
-                                    </div>
-                                    <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Fluxo de Obrigações (Todos os Status)</h2>
-                                </div>
+                                <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight flex items-center gap-3">
+                                    <span className="w-2 h-6 bg-black rounded-full"></span>
+                                    Cronograma Operacional
+                                </h2>
                                 
                                 <div className="flex items-center gap-6">
-                                    {/* CONTROLES DE PAGINAÇÃO MANUAL E FIXAÇÃO */}
-                                    <div className="flex items-center bg-slate-100 rounded-2xl p-1 shadow-inner border border-slate-200">
+                                    <div className="flex items-center bg-slate-100 rounded-2xl p-1 border border-slate-200">
                                         <button 
                                             onClick={() => { setCurrentPage(prev => (prev > 0 ? prev - 1 : totalPages - 1)); setIsPaused(true); }}
                                             className="p-2 hover:bg-white rounded-xl transition-all text-slate-400 hover:text-black"
-                                            title="Anterior"
                                         >
-                                            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+                                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
                                         </button>
-                                        
-                                        <div className="h-6 w-px bg-slate-200 mx-1"></div>
                                         
                                         <button 
                                             onClick={() => setIsPaused(!isPaused)} 
-                                            className={`px-4 py-2 rounded-xl transition-all font-black text-[10px] uppercase tracking-widest flex items-center gap-2 ${
+                                            className={`px-4 py-1.5 rounded-xl transition-all font-black text-[10px] uppercase tracking-widest ${
                                                 isPaused ? 'bg-black text-white' : 'bg-white text-[#FF2A7F] shadow-sm'
                                             }`}
                                         >
-                                            {isPaused ? (
-                                                <><span className="w-2 h-2 bg-white rounded-full"></span> Fixado</>
-                                            ) : (
-                                                <><span className="w-2 h-2 bg-[#FF2A7F] rounded-full animate-pulse"></span> Automático</>
-                                            )}
+                                            {isPaused ? 'Pausado' : 'Automático'}
                                         </button>
-
-                                        <div className="h-6 w-px bg-slate-200 mx-1"></div>
 
                                         <button 
                                             onClick={() => { setCurrentPage(prev => (prev + 1) % totalPages); setIsPaused(true); }}
                                             className="p-2 hover:bg-white rounded-xl transition-all text-slate-400 hover:text-black"
-                                            title="Próximo"
                                         >
-                                            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+                                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
                                         </button>
                                     </div>
 
-                                    <div className="px-5 py-2.5 bg-slate-800 text-white rounded-2xl text-xs font-black shadow-lg uppercase tracking-tighter">
+                                    <div className="px-5 py-2 bg-slate-800 text-white rounded-xl text-xs font-black">
                                         Pág {currentPage + 1} / {totalPages}
                                     </div>
                                 </div>
                             </div>
 
-                            {/* CABEÇALHO DA TABELA */}
-                            <div className="grid grid-cols-12 gap-4 px-8 py-4 bg-slate-50 text-slate-400 text-xs font-black uppercase tracking-widest border-b border-slate-100">
-                                <div className="col-span-3">Empresa / UF</div>
-                                <div className="col-span-3">Obrigação</div>
+                            <div className="grid grid-cols-12 gap-4 px-8 py-4 bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest border-b border-slate-100">
+                                <div className="col-span-3">Empresa / Regime</div>
+                                <div className="col-span-4">Obrigação / Tipo</div>
                                 <div className="col-span-2 text-center">Prazo</div>
-                                <div className="col-span-2 text-center">Situação</div>
-                                <div className="col-span-2 text-right">Responsável</div>
+                                <div className="col-span-2 text-center">Situação (G)</div>
+                                <div className="col-span-1 text-right">Resp.</div>
                             </div>
 
-                            {/* LISTAGEM DOS ITENS */}
-                            <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-start gap-3 mt-2">
-                                {currentDisplayItems.length > 0 ? (
-                                    currentDisplayItems.map((tax, idx) => (
-                                        <div 
-                                            key={`${tax.id}-${idx}-${currentPage}`} 
-                                            className={`grid grid-cols-12 gap-4 px-6 py-5 rounded-2xl border shadow-sm items-center animate-slide ${
-                                                tax.isDone ? 'bg-slate-50 border-slate-100 opacity-60' : 'bg-white border-slate-200'
-                                            }`}
-                                            style={{ animationDelay: `${idx * 0.08}s` }}
-                                        >
-                                            <div className="col-span-3">
-                                                <p className={`text-base font-bold uppercase truncate ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>
-                                                    {tax.empresa}
-                                                </p>
-                                                <div className="flex items-center gap-2 mt-1">
-                                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${tax.isDone ? 'bg-slate-100 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
-                                                        {tax.uf}
-                                                    </span>
-                                                    <span className="text-slate-400 text-[10px] font-bold uppercase truncate">{tax.regime}</span>
-                                                </div>
-                                            </div>
-                                            <div className="col-span-3">
-                                                <p className={`text-lg font-black uppercase leading-tight truncate ${tax.isDone ? 'text-slate-400 line-through' : 'text-black'}`}>
-                                                    {tax.name}
-                                                </p>
-                                                <p className={`text-xs font-bold uppercase truncate mt-0.5 ${tax.isDone ? 'text-slate-300' : 'text-[#FF2A7F]'}`}>
-                                                    {tax.tipo}
-                                                </p>
-                                            </div>
-                                            <div className="col-span-2 text-center">
-                                                <p className={`text-xl font-bold ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>{tax.prazo}</p>
-                                                <p className={`text-[10px] font-black uppercase mt-1 ${
-                                                    tax.isDone ? 'text-green-500' : 
-                                                    tax.urgency === 'atrasado' ? 'text-red-500' : 'text-yellow-500'
-                                                }`}>
-                                                    {tax.isDone ? 'ENTREGUE' : 
-                                                     tax.diffDays < 0 ? `${Math.abs(tax.diffDays)} dias atrasado` : 
-                                                     tax.diffDays === 0 ? 'Vence Hoje' : `Em ${tax.diffDays} dias`}
-                                                </p>
-                                            </div>
-                                            <div className="col-span-2 flex justify-center">
-                                                <span className={`px-4 py-1.5 rounded-lg font-black text-[10px] uppercase tracking-wider border flex items-center gap-2 ${
-                                                    tax.isDone ? 'bg-green-50 text-green-600 border-green-100' :
-                                                    tax.urgency === 'atrasado' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-yellow-50 text-yellow-600 border-yellow-200'
-                                                }`}>
-                                                    {tax.isDone ? 'Concluído' : (tax.situacao || tax.status)}
-                                                </span>
-                                            </div>
-                                            <div className="col-span-2 text-right">
-                                                <p className={`text-sm font-black uppercase ${tax.isDone ? 'text-slate-300' : 'text-slate-600'}`}>
-                                                    {tax.responsible}
-                                                </p>
-                                            </div>
+                            <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-start gap-3">
+                                {currentDisplayItems.map((tax, idx) => (
+                                    <div 
+                                        key={`${tax.id}-${currentPage}`} 
+                                        className={`grid grid-cols-12 gap-4 px-6 py-5 rounded-2xl border shadow-sm items-center animate-slide ${
+                                            tax.isDone ? 'bg-slate-50 border-slate-100 opacity-60' : 'bg-white border-slate-200'
+                                        }`}
+                                        style={{ animationDelay: `${idx * 0.05}s` }}
+                                    >
+                                        <div className="col-span-3">
+                                            <p className={`text-sm font-bold uppercase truncate ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>
+                                                {tax.empresa}
+                                            </p>
+                                            <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">{tax.regime} • {tax.uf}</p>
                                         </div>
-                                    ))
-                                ) : (
-                                    <div className="flex flex-col items-center justify-center h-full text-slate-300 italic uppercase font-black tracking-widest text-2xl">
-                                        Nenhuma informação encontrada
+                                        <div className="col-span-4">
+                                            <p className={`text-base font-black uppercase leading-tight truncate ${tax.isDone ? 'text-slate-400 line-through' : 'text-black'}`}>
+                                                {tax.name}
+                                            </p>
+                                            <p className="text-[10px] font-bold text-[#FF2A7F] uppercase mt-0.5">{tax.tipo}</p>
+                                        </div>
+                                        <div className="col-span-2 text-center">
+                                            <p className={`text-lg font-bold ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>{tax.prazo}</p>
+                                        </div>
+                                        <div className="col-span-2 flex justify-center">
+                                            <span className={`px-4 py-1.5 rounded-lg font-black text-[10px] uppercase border ${
+                                                tax.isDone ? 'bg-green-50 text-green-600 border-green-100' :
+                                                tax.urgency === 'atrasado' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-yellow-50 text-yellow-600 border-yellow-200'
+                                            }`}>
+                                                {tax.situacao}
+                                            </span>
+                                        </div>
+                                        <div className="col-span-1 text-right">
+                                            <p className="text-[11px] font-black uppercase text-slate-500">{tax.responsible.split(' ')[0]}</p>
+                                        </div>
                                     </div>
-                                )}
+                                ))}
                             </div>
                         </div>
                     </div>
@@ -429,9 +341,9 @@
             const textClassNames = (color === 'dark') ? 'text-slate-400' : 'text-slate-500';
 
             return (
-                <div className={`p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center h-36 ${themeClass}`}>
-                    <span className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${textClassNames}`}>{title}</span>
-                    <div className="text-5xl font-black tracking-tighter">{value}</div>
+                <div className={`p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center h-32 ${themeClass}`}>
+                    <span className={`text-[9px] font-bold uppercase tracking-widest mb-1 ${textClassNames}`}>{title}</span>
+                    <div className="text-4xl font-black tracking-tighter">{value}</div>
                 </div>
             );
         }
