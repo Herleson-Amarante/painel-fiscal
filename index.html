@@ -17,7 +17,7 @@ const SHEET_BASE_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4
 
 // Mapeamento de GIDs atualizado conforme solicitado
 const COMPETENCIAS = [
-  { label: "Geral", gid: "802166840" }, // Novo GID fornecido
+  { label: "Geral", gid: "802166840" }, 
   { label: "Jan-2026", gid: "0" },
   { label: "Fev-2026", gid: "1165184281" }
 ];
@@ -25,8 +25,7 @@ const COMPETENCIAS = [
 const App = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-  // Define a aba "Geral" como ativa inicialmente
+  const [error, setError] = useState(null);
   const [competenciaAtiva, setCompetenciaAtiva] = useState(COMPETENCIAS[0]); 
   const [filtroSituacao, setFiltroSituacao] = useState('TODOS');
   const [busca, setBusca] = useState('');
@@ -53,33 +52,33 @@ const App = () => {
     });
   };
 
-  const fetchData = async () => {
+  const fetchData = async (retryCount = 0) => {
     setLoading(true);
-    setError(false);
+    setError(null);
     try {
-      // Montagem da URL com o GID da competência ativa e cache buster
-      const url = `${SHEET_BASE_URL}&gid=${competenciaAtiva.gid}&t=${new Date().getTime()}`;
+      // Simplificamos a URL e adicionamos um timestamp único para evitar cache
+      const url = `${SHEET_BASE_URL}&gid=${competenciaAtiva.gid}&cache=${Date.now()}`;
       
+      // Removidos headers complexos que costumam causar erros de CORS em sandboxes
       const response = await fetch(url);
 
       if (!response.ok) {
-        throw new Error(`Erro HTTP! Status: ${response.status}`);
+        throw new Error(`Erro de resposta: ${response.status} ${response.statusText}`);
       }
       
       const text = await response.text();
       
-      // Validação de segurança para garantir que recebemos CSV
-      if (text.includes('<!DOCTYPE html>') || text.includes('script')) {
-        throw new Error("A resposta não é um CSV válido. Verifique a publicação da aba.");
+      // Verifica se o Google retornou HTML (página de login ou erro) em vez de CSV
+      if (text.trim().startsWith('<!DOCTYPE html>')) {
+        throw new Error("A planilha não está acessível. Verifique se ela foi 'Publicada na Web' corretamente como CSV.");
       }
 
       const rows = parseCSV(text);
 
-      // Identifica o cabeçalho "Empresa" para mapear os dados corretamente
+      // Busca o cabeçalho "Empresa" ignorando maiúsculas/minúsculas
       const headerIdx = rows.findIndex(r => r[0] && r[0].toLowerCase().includes('empresa'));
       
       if (headerIdx === -1) {
-        console.warn("Cabeçalho 'Empresa' não encontrado nesta aba.");
         setData([]);
         return;
       }
@@ -105,9 +104,14 @@ const App = () => {
 
       setData(formattedData);
     } catch (err) {
-      console.error("Erro no fetch:", err);
-      setError(true);
-      setData([]);
+      console.error("Erro no carregamento:", err);
+      
+      // Tenta novamente uma vez se falhar (pode ser instabilidade momentânea)
+      if (retryCount < 1) {
+        setTimeout(() => fetchData(retryCount + 1), 1000);
+      } else {
+        setError("Não foi possível conectar à planilha. Isso pode ser um bloqueio de segurança (CORS) ou link offline.");
+      }
     } finally {
       setLoading(false);
     }
@@ -148,7 +152,7 @@ const App = () => {
     <div className="min-h-screen bg-[#FDFDFF] text-slate-800 font-sans p-4 md:p-8">
       <header className="max-w-7xl mx-auto flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 mb-12">
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-[#FF4DAD] rounded-[1.25rem] flex items-center justify-center shadow-xl shadow-pink-100 transition-transform hover:scale-105">
+          <div className="w-14 h-14 bg-[#FF4DAD] rounded-[1.25rem] flex items-center justify-center shadow-xl shadow-pink-100">
             <FileText className="text-white" size={32} />
           </div>
           <div>
@@ -157,7 +161,7 @@ const App = () => {
             </h1>
             <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.25em] flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              Gestão de Obrigações Fiscais
+              Gestão Fiscal Centralizada
             </p>
           </div>
         </div>
@@ -178,7 +182,7 @@ const App = () => {
           ))}
           <div className="w-px h-8 bg-slate-100 mx-2" />
           <button 
-            onClick={fetchData}
+            onClick={() => fetchData()}
             disabled={loading}
             className={`p-3 text-slate-400 hover:text-[#FF4DAD] rounded-full transition-all ${loading ? 'animate-spin opacity-50' : ''}`}
           >
@@ -189,12 +193,12 @@ const App = () => {
 
       <main className="max-w-7xl mx-auto">
         {error && (
-          <div className="mb-8 bg-rose-50 border border-rose-100 rounded-[2rem] p-8 flex flex-col md:flex-row items-center gap-6 text-rose-700">
+          <div className="mb-8 bg-rose-50 border border-rose-100 rounded-[2rem] p-8 flex flex-col md:flex-row items-center gap-6 text-rose-700 animate-in fade-in zoom-in-95 duration-300">
             <WifiOff size={32} />
             <div className="text-center md:text-left">
-              <p className="font-black uppercase text-xs tracking-widest mb-1">Erro de Conexão</p>
-              <p className="text-lg font-bold">Falha ao acessar a aba {competenciaAtiva.label}.</p>
-              <p className="text-sm opacity-80 mt-1">Certifique-se de que esta aba específica também está publicada como CSV.</p>
+              <p className="font-black uppercase text-xs tracking-widest mb-1">Atenção</p>
+              <p className="text-lg font-bold">{error}</p>
+              <p className="text-sm opacity-80 mt-1">Isso geralmente ocorre quando o link CSV expira ou o navegador bloqueia a requisição.</p>
             </div>
           </div>
         )}
@@ -210,7 +214,7 @@ const App = () => {
           <Search className="absolute left-7 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-[#FF4DAD]" size={26} />
           <input 
             type="text"
-            placeholder={`Filtrar em ${competenciaAtiva.label}...`}
+            placeholder={`Pesquisar em ${competenciaAtiva.label}...`}
             className="w-full pl-16 pr-8 py-7 bg-white border border-slate-100 rounded-[2.5rem] shadow-sm focus:outline-none focus:ring-4 focus:ring-[#FF4DAD]/5 transition-all text-xl font-medium"
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
@@ -221,7 +225,7 @@ const App = () => {
           {loading ? (
             <div className="py-56 flex flex-col items-center justify-center gap-6">
               <div className="w-16 h-16 border-[6px] border-slate-100 border-t-[#FF4DAD] rounded-full animate-spin"></div>
-              <p className="text-slate-400 font-black tracking-[0.4em] text-[10px] uppercase">Carregando {competenciaAtiva.label}...</p>
+              <p className="text-slate-400 font-black tracking-[0.4em] text-[10px] uppercase">Sincronizando dados...</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -241,7 +245,7 @@ const App = () => {
                       <td className="px-12 py-8">
                         <div className="flex items-center gap-6">
                           <div className="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-[#FF4DAD] font-black text-xs shadow-sm group-hover:border-[#FF4DAD]/30 transition-all">
-                            {item.uf}
+                            {item.uf || '--'}
                           </div>
                           <div>
                             <p className="font-bold text-slate-900 text-lg leading-tight group-hover:text-[#FF4DAD] transition-colors">{item.empresa}</p>
@@ -275,7 +279,7 @@ const App = () => {
               {filteredData.length === 0 && (
                 <div className="py-40 text-center flex flex-col items-center">
                   <Filter className="text-slate-100 mb-4" size={60} />
-                  <p className="text-slate-400 font-black uppercase tracking-widest text-[10px]">Sem registros encontrados</p>
+                  <p className="text-slate-400 font-black uppercase tracking-widest text-[10px]">Sem registos encontrados</p>
                 </div>
               )}
             </div>
@@ -286,9 +290,9 @@ const App = () => {
       <footer className="max-w-7xl mx-auto mt-20 mb-16 flex justify-between items-center text-slate-400 text-[10px] font-black uppercase tracking-[0.3em] px-8 pt-10 border-t border-slate-100">
         <p>© 2026 Gocase Hub</p>
         <div className="flex items-center gap-6">
-          <span>Status: {error ? 'Offline' : 'Operacional'}</span>
+          <span>Status: {error ? 'Desconectado' : 'Online'}</span>
           <span className="text-slate-200">|</span>
-          <span className="text-[#FF4DAD]">v3.4.0</span>
+          <span className="text-[#FF4DAD]">v3.4.2</span>
         </div>
       </footer>
     </div>
@@ -304,7 +308,7 @@ const StatCard = ({ label, value, icon, color, active, onClick }) => (
       : 'bg-white border-slate-100 hover:border-slate-300'
     }`}
   >
-    <div className="relative z-10">
+    <div className="relative z-10 text-left">
       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">{label}</p>
       <p className={`text-5xl font-black ${active ? 'text-slate-900' : 'text-slate-700'}`}>{value}</p>
     </div>
