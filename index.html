@@ -37,7 +37,7 @@
     <script type="text/babel">
         const { useState, useEffect, useCallback, useRef } = React;
 
-        const BASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv";
+        const BASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8czDGBw/pub?output=csv";
         
         const CONFIG_COMPETENCIAS = [
             { id: '0', nome: 'Agenda Jan.2026' },
@@ -45,17 +45,15 @@
             { id: '135792468', nome: 'Agenda Mar.2026' },
         ];
 
-        // Proxies organizados por confiabilidade para evitar 408 e CORS
         const PROXIES = [
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
             (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-            (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
-            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
+            (url) => `https://thingproxy.freeboard.io/fetch/${url}`
         ];
 
         const ITEMS_PER_PAGE = 5;
-        const SECONDS_PER_PAGE = 10;
-        const REQUEST_TIMEOUT = 12000; // 12 segundos antes de abortar uma tentativa individual
+        const SECONDS_PER_PAGE = 12; // Um pouco mais de tempo para ler itens concluídos
+        const REQUEST_TIMEOUT = 12000;
 
         function App() {
             const [currentTime, setCurrentTime] = useState(new Date());
@@ -71,7 +69,6 @@
                 return localStorage.getItem('gocase_selected_gid') || CONFIG_COMPETENCIAS[0].id;
             });
 
-            // Função de fetch aprimorada com timeout real e retry
             const fetchWithTimeout = async (url, options = {}, timeout = REQUEST_TIMEOUT) => {
                 const controller = new AbortController();
                 const id = setTimeout(() => controller.abort(), timeout);
@@ -88,13 +85,10 @@
 
             const fetchSheetData = useCallback(async (forcedGid) => {
                 const targetGid = forcedGid || selectedGid;
-                setErrorMsg(null);
-                
-                // Estratégia de tentativas dentro da mesma execução
                 let success = false;
                 let currentTryProxy = proxyIndex;
 
-                for (let i = 0; i < 3; i++) { // Tenta até 3 proxies diferentes nesta rodada
+                for (let i = 0; i < 3; i++) {
                     try {
                         const fetchUrlWithGid = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&single=true&t=${Date.now()}`;
                         const fetchUrl = PROXIES[currentTryProxy](fetchUrlWithGid);
@@ -113,13 +107,16 @@
                             });
                         }
 
-                        const targetData = rows.slice(5, 120);
+                        const targetData = rows.slice(5, 150); // Pegando um range maior de linhas
                         const today = new Date();
                         today.setHours(0,0,0,0);
 
                         const parsedData = targetData
                             .filter(cols => cols[4] && cols[4] !== "" && cols[4] !== "Obrigações") 
                             .map((cols, index) => {
+                                const statusValue = (cols[8] || '').toLowerCase();
+                                const isDone = statusValue.includes('pago') || statusValue.includes('conclu') || statusValue.includes('entregue') || statusValue.includes('ok');
+
                                 const item = {
                                     id: index,
                                     empresa: cols[0] || '-',
@@ -130,7 +127,8 @@
                                     prazo: cols[5] || '---',
                                     situacao: cols[6] || '-',
                                     responsible: cols[7] || 'Equipe',
-                                    status: (cols[8] || 'pendente').toLowerCase()
+                                    status: statusValue,
+                                    isDone: isDone
                                 };
 
                                 let diffDays = 999;
@@ -145,13 +143,11 @@
                                 }
 
                                 let urgency = 'normal';
-                                const isDone = item.status.includes('pago') || item.status.includes('conclu') || item.status.includes('entregue');
-                                
-                                if (!isDone) {
+                                if (isDone) {
+                                    urgency = 'entregue';
+                                } else {
                                     if (diffDays < 0) urgency = 'atrasado';
                                     else if (diffDays <= 2) urgency = 'alerta';
-                                } else {
-                                    urgency = 'entregue';
                                 }
 
                                 return { ...item, diffDays, urgency };
@@ -159,20 +155,18 @@
                         
                         setTaxes(parsedData);
                         setLoading(false);
+                        setErrorMsg(null);
                         success = true;
-                        setProxyIndex(currentTryProxy); // Salva o proxy que funcionou
+                        setProxyIndex(currentTryProxy);
                         break; 
                     } catch (err) {
-                        console.warn(`Tentativa ${i+1} falhou com proxy ${currentTryProxy}:`, err.message);
                         currentTryProxy = (currentTryProxy + 1) % PROXIES.length;
-                        // Espera um pouco antes de trocar de proxy (backoff)
-                        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+                        await new Promise(r => setTimeout(r, 1000));
                     }
                 }
 
                 if (!success) {
-                    setErrorMsg("Conexão instável. Tentando restabelecer link...");
-                    // Se falhou tudo, o setInterval tentará novamente em 1 minuto
+                    setErrorMsg("Falha na sincronização. Tentando reconectar...");
                 }
             }, [proxyIndex, selectedGid]);
 
@@ -183,8 +177,14 @@
                 return () => { clearInterval(dataTimer); clearInterval(clockTimer); };
             }, [fetchSheetData]);
 
-            const criticalItems = taxes.filter(t => t.urgency === 'atrasado' || t.urgency === 'alerta');
-            const totalPages = Math.ceil(criticalItems.length / ITEMS_PER_PAGE) || 1;
+            // LISTA PRINCIPAL: Agora inclui TUDO (Pendentes + Entregues)
+            // Priorizamos a ordem: Atrasadas primeiro, Alertas depois, e por fim Entregues (por data mais recente)
+            const allItemsForPagination = [...taxes].sort((a, b) => {
+                const order = { 'atrasado': 0, 'alerta': 1, 'normal': 2, 'entregue': 3 };
+                return order[a.urgency] - order[b.urgency];
+            });
+
+            const totalPages = Math.ceil(allItemsForPagination.length / ITEMS_PER_PAGE) || 1;
 
             useEffect(() => {
                 if (currentPage >= totalPages) setCurrentPage(0);
@@ -207,7 +207,7 @@
                 fetchSheetData(newGid);
             };
 
-            const currentDisplayItems = criticalItems.slice(
+            const currentDisplayItems = allItemsForPagination.slice(
                 currentPage * ITEMS_PER_PAGE, 
                 (currentPage + 1) * ITEMS_PER_PAGE
             );
@@ -219,16 +219,8 @@
                         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center loading-overlay">
                             <div className="w-16 h-16 border-4 border-[#FF2A7F] border-t-transparent rounded-full animate-spin mb-4"></div>
                             <p className="text-[#FF2A7F] font-black uppercase tracking-widest animate-pulse text-xl text-center px-10">
-                                {errorMsg ? errorMsg : `Sincronizando ${CONFIG_COMPETENCIAS.find(c => c.id === selectedGid)?.nome}...`}
+                                {errorMsg ? errorMsg : `Sincronizando Dados...`}
                             </p>
-                            {errorMsg && (
-                                <button 
-                                    onClick={() => { setLoading(true); fetchSheetData(); }} 
-                                    className="mt-6 px-8 py-3 bg-black text-white rounded-full font-bold uppercase text-sm hover:scale-105 transition-transform"
-                                >
-                                    Reconectar Manualmente
-                                </button>
-                            )}
                         </div>
                     )}
 
@@ -260,11 +252,13 @@
 
                             <div className="flex gap-6">
                                 <div className="text-right">
-                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">Acessórias</p>
-                                    <div className="text-2xl font-black text-slate-800">{meta.qtdAcessorias}</div>
+                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">Pendentes</p>
+                                    <div className="text-2xl font-black text-slate-800">
+                                        {taxes.filter(t => !t.isDone).length}
+                                    </div>
                                 </div>
                                 <div className="text-right">
-                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">Total Entregue</p>
+                                    <p className="text-slate-400 text-xs font-bold uppercase mb-1">Eficiência</p>
                                     <div className="text-2xl font-black text-[#FF2A7F]">{meta.efficiency}</div>
                                 </div>
                             </div>
@@ -278,9 +272,9 @@
                     <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                         
                         <div className="grid grid-cols-4 gap-6 shrink-0">
-                            <SummaryCard title={`Eficiência - ${CONFIG_COMPETENCIAS.find(c => c.id === selectedGid)?.nome}`} value={meta.efficiency} color="pink" />
-                            <SummaryCard title="Obrigações na Aba" value={meta.qtdTotal} color="dark" />
-                            <SummaryCard title="Atenção (2 dias)" value={taxes.filter(t => t.urgency === 'alerta').length} color="yellow" />
+                            <SummaryCard title="Meta de Entrega" value={meta.efficiency} color="pink" />
+                            <SummaryCard title="Total de Obrigações" value={meta.qtdTotal} color="dark" />
+                            <SummaryCard title="Concluídas" value={taxes.filter(t => t.isDone).length} color="green" />
                             <SummaryCard title="Atrasadas" value={taxes.filter(t => t.urgency === 'atrasado').length} color="red" />
                         </div>
 
@@ -297,39 +291,24 @@
 
                             <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-white">
                                 <div className="flex items-center gap-3">
-                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${criticalItems.length > 0 ? 'bg-red-100' : 'bg-green-100'}`}>
-                                        <svg className={`w-5 h-5 ${criticalItems.length > 0 ? 'text-red-500' : 'text-green-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d={criticalItems.length > 0 ? "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" : "M5 13l4 4L19 7"}></path>
+                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center bg-slate-100`}>
+                                        <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
                                         </svg>
                                     </div>
-                                    <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Obrigações Pendentes</h2>
+                                    <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Fluxo de Obrigações</h2>
                                     <span className="text-xs font-bold text-slate-400 ml-4 px-3 py-1 bg-slate-50 rounded-full border border-slate-100 uppercase">
-                                        Monitorando: {CONFIG_COMPETENCIAS.find(c => c.id === selectedGid)?.nome}
+                                        Pág {currentPage + 1} de {totalPages}
                                     </span>
                                 </div>
                                 
                                 <div className="flex items-center gap-4">
-                                    {totalPages > 1 && (
-                                        <div className="flex items-center bg-slate-100 rounded-xl p-1 shadow-inner">
-                                            <button 
-                                                onClick={() => { setCurrentPage(prev => prev > 0 ? prev - 1 : totalPages - 1); setIsPaused(true); }} 
-                                                className="p-2 text-slate-500 hover:bg-white rounded-lg transition-all">
-                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/></svg>
-                                            </button>
-                                            <button 
-                                                onClick={() => setIsPaused(!isPaused)} 
-                                                className={`px-3 py-2 rounded-lg transition-all font-bold text-xs uppercase flex items-center gap-1 ${isPaused ? 'bg-[#FF2A7F] text-white shadow-md' : 'text-slate-500 hover:bg-white'}`} >
-                                                {isPaused ? 'Fixado' : 'Rodar'}
-                                            </button>
-                                            <button 
-                                                onClick={() => { setCurrentPage(prev => (prev + 1) % totalPages); setIsPaused(true); }} 
-                                                className="p-2 text-slate-500 hover:bg-white rounded-lg transition-all">
-                                                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
-                                            </button>
-                                        </div>
-                                    )}
-                                    <div className="px-5 py-2 bg-slate-100 text-slate-600 rounded-full text-sm font-bold shadow-inner">
-                                        Pág {currentPage + 1} de {totalPages}
+                                    <div className="flex items-center bg-slate-100 rounded-xl p-1">
+                                        <button 
+                                            onClick={() => setIsPaused(!isPaused)} 
+                                            className={`px-4 py-2 rounded-lg transition-all font-bold text-xs uppercase ${isPaused ? 'bg-[#FF2A7F] text-white' : 'text-slate-500'}`} >
+                                            {isPaused ? 'Pausado' : 'Automático'}
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -338,71 +317,65 @@
                                 <div className="col-span-3">Empresa / UF</div>
                                 <div className="col-span-3">Obrigação</div>
                                 <div className="col-span-2 text-center">Prazo</div>
-                                <div className="col-span-2 text-center">Situação</div>
+                                <div className="col-span-2 text-center">Status</div>
                                 <div className="col-span-2 text-right">Responsável</div>
                             </div>
 
-                            <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-center relative">
-                                {loading && taxes.length > 0 && (
-                                    <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-4 h-4 border-2 border-[#FF2A7F] border-t-transparent rounded-full animate-spin"></div>
-                                            <div className="text-[#FF2A7F] font-bold text-sm uppercase tracking-widest">Sincronizando...</div>
+                            <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-start gap-3 mt-2">
+                                {currentDisplayItems.map((tax, idx) => (
+                                    <div 
+                                        key={`${tax.id}-${idx}`} 
+                                        className={`grid grid-cols-12 gap-4 px-6 py-5 rounded-2xl border shadow-sm items-center animate-slide ${
+                                            tax.isDone ? 'bg-white border-slate-100 opacity-70' : 'bg-white border-slate-200'
+                                        }`}
+                                        style={{ animationDelay: `${idx * 0.08}s` }}
+                                    >
+                                        <div className="col-span-3">
+                                            <p className={`text-base font-bold uppercase truncate ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>
+                                                {tax.empresa}
+                                            </p>
+                                            <div className="flex items-center gap-2 mt-1">
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${tax.isDone ? 'bg-slate-50 text-slate-400' : 'bg-slate-100 text-slate-500'}`}>
+                                                    {tax.uf}
+                                                </span>
+                                                <span className="text-slate-400 text-[10px] font-bold uppercase truncate">{tax.regime}</span>
+                                            </div>
+                                        </div>
+                                        <div className="col-span-3">
+                                            <p className={`text-lg font-black uppercase leading-tight truncate ${tax.isDone ? 'text-slate-400 line-through' : 'text-black'}`}>
+                                                {tax.name}
+                                            </p>
+                                            <p className={`text-xs font-bold uppercase truncate mt-0.5 ${tax.isDone ? 'text-slate-300' : 'text-[#FF2A7F]'}`}>
+                                                {tax.tipo}
+                                            </p>
+                                        </div>
+                                        <div className="col-span-2 text-center">
+                                            <p className={`text-xl font-bold ${tax.isDone ? 'text-slate-400' : 'text-slate-800'}`}>{tax.prazo}</p>
+                                            <p className={`text-[10px] font-black uppercase mt-1 ${
+                                                tax.isDone ? 'text-green-500' : 
+                                                tax.urgency === 'atrasado' ? 'text-red-500' : 'text-yellow-500'
+                                            }`}>
+                                                {tax.isDone ? 'CONCLUÍDO' : 
+                                                 tax.diffDays < 0 ? `${Math.abs(tax.diffDays)} dias atrasado` : 
+                                                 tax.diffDays === 0 ? 'Vence Hoje' : `Em ${tax.diffDays} dias`}
+                                            </p>
+                                        </div>
+                                        <div className="col-span-2 flex justify-center">
+                                            <span className={`px-4 py-1.5 rounded-lg font-black text-xs uppercase tracking-wider border flex items-center gap-2 ${
+                                                tax.isDone ? 'bg-green-50 text-green-600 border-green-100' :
+                                                tax.urgency === 'atrasado' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-yellow-50 text-yellow-600 border-yellow-200'
+                                            }`}>
+                                                {tax.isDone && <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>}
+                                                {tax.isDone ? 'Entregue' : (tax.situacao || tax.status)}
+                                            </span>
+                                        </div>
+                                        <div className="col-span-2 text-right">
+                                            <p className={`text-sm font-black uppercase ${tax.isDone ? 'text-slate-300' : 'text-slate-600'}`}>
+                                                {tax.responsible}
+                                            </p>
                                         </div>
                                     </div>
-                                )}
-                                
-                                {criticalItems.length > 0 ? (
-                                    <div className="flex flex-col gap-3">
-                                        {currentDisplayItems.map((tax, idx) => (
-                                            <div 
-                                                key={`${tax.id}-${selectedGid}-${currentPage}-${idx}`} 
-                                                className="grid grid-cols-12 gap-4 px-6 py-5 bg-white rounded-2xl border border-slate-100 shadow-sm items-center animate-slide"
-                                                style={{ animationDelay: `${idx * 0.05}s` }}
-                                            >
-                                                <div className="col-span-3">
-                                                    <p className="text-base font-bold text-slate-800 uppercase truncate">{tax.empresa}</p>
-                                                    <div className="flex items-center gap-2 mt-1">
-                                                        <span className="px-2 py-0.5 bg-slate-100 text-slate-500 rounded text-[10px] font-bold">{tax.uf}</span>
-                                                        <span className="text-slate-400 text-[10px] font-bold uppercase truncate">{tax.regime}</span>
-                                                    </div>
-                                                </div>
-                                                <div className="col-span-3">
-                                                    <p className="text-lg font-black text-black uppercase leading-tight truncate">{tax.name}</p>
-                                                    <p className="text-[#FF2A7F] text-xs font-bold uppercase truncate mt-0.5">{tax.tipo}</p>
-                                                </div>
-                                                <div className="col-span-2 text-center">
-                                                    <p className="text-xl font-bold text-slate-800">{tax.prazo}</p>
-                                                    <p className={`text-[10px] font-black uppercase mt-1 ${tax.urgency === 'atrasado' ? 'text-red-500' : 'text-yellow-500'}`}>
-                                                        {tax.diffDays < 0 ? `${Math.abs(tax.diffDays)} dias atrasado` : tax.diffDays === 0 ? 'Vence Hoje' : `Em ${tax.diffDays} dias`}
-                                                    </p>
-                                                </div>
-                                                <div className="col-span-2 flex justify-center">
-                                                    <span className={`px-4 py-1.5 rounded-lg font-black text-xs uppercase tracking-wider border ${
-                                                        tax.urgency === 'atrasado' ? 'bg-red-50 text-red-600 border-red-200' : 'bg-yellow-50 text-yellow-600 border-yellow-200'
-                                                    }`}>
-                                                        {tax.situacao || tax.status}
-                                                    </span>
-                                                </div>
-                                                <div className="col-span-2 text-right">
-                                                    <p className="text-sm font-black text-slate-600 uppercase">{tax.responsible}</p>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                ) : (
-                                    <div className="flex flex-col items-center justify-center h-full">
-                                        {!loading && (
-                                            <>
-                                                <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6">
-                                                    <svg className="w-12 h-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
-                                                </div>
-                                                <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-2">Sem Pendências!</h3>
-                                                <p className="text-slate-500 font-medium italic text-center">Tudo verificado na aba {CONFIG_COMPETENCIAS.find(c => c.id === selectedGid)?.nome}.</p>
-                                            </>
-                                        )}
-                                    </div>
-                                )}
+                                ))}
                             </div>
                         </div>
                     </div>
@@ -414,11 +387,11 @@
             const themes = {
                 pink: 'bg-white border-slate-100 text-[#FF2A7F]',
                 dark: 'bg-black border-black text-white',
-                yellow: 'bg-white border-slate-100 text-yellow-500',
+                green: 'bg-green-50 border-green-100 text-green-600',
                 red: 'bg-red-50 border-red-100 text-red-500'
             };
             const themeClass = themes[color] || themes.pink;
-            const textClassNames = color === 'dark' ? 'text-slate-400' : 'text-slate-500';
+            const textClassNames = (color === 'dark') ? 'text-slate-400' : 'text-slate-500';
 
             return (
                 <div className={`p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center h-36 ${themeClass}`}>
