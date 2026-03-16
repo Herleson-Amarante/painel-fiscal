@@ -25,126 +25,160 @@
             to { opacity: 1; transform: translateX(0); }
         }
         ::-webkit-scrollbar { display: none; }
+        .loading-overlay {
+            background: rgba(243, 244, 246, 0.85);
+            backdrop-filter: blur(10px);
+        }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useCallback } = React;
+        const { useState, useEffect, useCallback, useRef } = React;
 
-        // URL Base da planilha (sem o GID)
         const BASE_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv";
         
-        // ==========================================
-        // CONFIGURAÇÃO DE ABAS (COMPETÊNCIAS)
-        // O id deve ser o GID da aba (aquele número no final da URL de publicação)
-        // ==========================================
         const CONFIG_COMPETENCIAS = [
             { id: '0', nome: 'Agenda Jan.2026' },
-            { id: '123456789', nome: 'Agenda Fev.2026' }, // Exemplo: Substitua pelo GID real da aba Fev
-            { id: '987654321', nome: 'Agenda Mar.2026' }, // Exemplo: Substitua pelo GID real da aba Mar
+            { id: '802166840', nome: 'Agenda Fev.2026' },
+            { id: '135792468', nome: 'Agenda Mar.2026' },
         ];
 
+        // Proxies organizados por confiabilidade para evitar 408 e CORS
         const PROXIES = [
             (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
+            (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            (url) => `https://thingproxy.freeboard.io/fetch/${url}`,
+            (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
         ];
 
         const ITEMS_PER_PAGE = 5;
         const SECONDS_PER_PAGE = 10;
+        const REQUEST_TIMEOUT = 12000; // 12 segundos antes de abortar uma tentativa individual
 
         function App() {
             const [currentTime, setCurrentTime] = useState(new Date());
             const [taxes, setTaxes] = useState([]);
             const [meta, setMeta] = useState({ qtdTotal: '0', qtdAcessorias: '0', efficiency: '0%' });
             const [loading, setLoading] = useState(true);
+            const [errorMsg, setErrorMsg] = useState(null);
             const [proxyIndex, setProxyIndex] = useState(0);
             const [currentPage, setCurrentPage] = useState(0);
             const [isPaused, setIsPaused] = useState(false);
 
-            // Puxar a competência salva (GID da aba)
             const [selectedGid, setSelectedGid] = useState(() => {
                 return localStorage.getItem('gocase_selected_gid') || CONFIG_COMPETENCIAS[0].id;
             });
 
-            const fetchSheetData = useCallback(async () => {
+            // Função de fetch aprimorada com timeout real e retry
+            const fetchWithTimeout = async (url, options = {}, timeout = REQUEST_TIMEOUT) => {
+                const controller = new AbortController();
+                const id = setTimeout(() => controller.abort(), timeout);
                 try {
-                    // Constrói o URL com o GID da aba selecionada
-                    const fetchUrlWithGid = `${BASE_SPREADSHEET_URL}&gid=${selectedGid}`;
-                    const fetchUrl = PROXIES[proxyIndex](fetchUrlWithGid);
-                    
-                    const response = await fetch(fetchUrl);
-                    if (!response.ok) throw new Error('Falha na rede');
-                    const csvText = await response.text();
-                    
-                    const rows = csvText.split(/\r?\n/).map(row => {
-                        return row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
-                    });
-
-                    // Metadados fixos: I3 (8), B3 (1), B4 (1)
-                    if (rows.length >= 4) {
-                        setMeta({
-                            qtdTotal: rows[2]?.[1] || '0',
-                            efficiency: rows[2]?.[8] || '0%',
-                            qtdAcessorias: rows[3]?.[1] || '0'
-                        });
-                    }
-
-                    const targetData = rows.slice(5, 88);
-                    const today = new Date();
-                    today.setHours(0,0,0,0);
-
-                    const parsedData = targetData
-                        .filter(cols => cols[4] && cols[4] !== "") 
-                        .map((cols, index) => {
-                            const item = {
-                                id: index,
-                                empresa: cols[0] || '-',
-                                uf: cols[1] || '-',
-                                regime: cols[2] || '-',
-                                tipo: cols[3] || '-',
-                                name: cols[4] || 'Obrigação',
-                                prazo: cols[5] || '---',
-                                situacao: cols[6] || '-',
-                                responsible: cols[7] || 'Equipe',
-                                status: (cols[8] || 'pendente').toLowerCase()
-                            };
-
-                            let diffDays = 999;
-                            if (item.prazo && item.prazo.includes('/')) {
-                                const [d, m, y] = item.prazo.split('/');
-                                const fullYear = y && y.length === 2 ? `20${y}` : y;
-                                const dueDate = new Date(fullYear, m - 1, d);
-                                if (!isNaN(dueDate.getTime())) {
-                                    const diffTime = dueDate.getTime() - today.getTime();
-                                    diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                                }
-                            }
-
-                            let urgency = 'normal';
-                            const isDone = item.status.includes('pago') || item.status.includes('conclu') || item.status.includes('entregue');
-                            
-                            if (!isDone) {
-                                if (diffDays < 0) urgency = 'atrasado';
-                                else if (diffDays <= 2) urgency = 'alerta';
-                            } else {
-                                urgency = 'entregue';
-                            }
-
-                            return { ...item, diffDays, urgency };
-                        });
-                    
-                    setTaxes(parsedData);
-                    setLoading(false);
+                    const response = await fetch(url, { ...options, signal: controller.signal });
+                    clearTimeout(id);
+                    if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
+                    return await response.text();
                 } catch (err) {
-                    setProxyIndex((prev) => (prev + 1) % PROXIES.length);
+                    clearTimeout(id);
+                    throw err;
+                }
+            };
+
+            const fetchSheetData = useCallback(async (forcedGid) => {
+                const targetGid = forcedGid || selectedGid;
+                setErrorMsg(null);
+                
+                // Estratégia de tentativas dentro da mesma execução
+                let success = false;
+                let currentTryProxy = proxyIndex;
+
+                for (let i = 0; i < 3; i++) { // Tenta até 3 proxies diferentes nesta rodada
+                    try {
+                        const fetchUrlWithGid = `${BASE_SPREADSHEET_URL}&gid=${targetGid}&single=true&t=${Date.now()}`;
+                        const fetchUrl = PROXIES[currentTryProxy](fetchUrlWithGid);
+                        
+                        const csvText = await fetchWithTimeout(fetchUrl);
+                        
+                        const rows = csvText.split(/\r?\n/).map(row => {
+                            return row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(c => c.replace(/^"|"$/g, '').trim());
+                        });
+
+                        if (rows.length >= 4) {
+                            setMeta({
+                                qtdTotal: rows[2]?.[1] || '0',
+                                efficiency: rows[2]?.[8] || '0%',
+                                qtdAcessorias: rows[3]?.[1] || '0'
+                            });
+                        }
+
+                        const targetData = rows.slice(5, 120);
+                        const today = new Date();
+                        today.setHours(0,0,0,0);
+
+                        const parsedData = targetData
+                            .filter(cols => cols[4] && cols[4] !== "" && cols[4] !== "Obrigações") 
+                            .map((cols, index) => {
+                                const item = {
+                                    id: index,
+                                    empresa: cols[0] || '-',
+                                    uf: cols[1] || '-',
+                                    regime: cols[2] || '-',
+                                    tipo: cols[3] || '-',
+                                    name: cols[4] || 'Obrigação',
+                                    prazo: cols[5] || '---',
+                                    situacao: cols[6] || '-',
+                                    responsible: cols[7] || 'Equipe',
+                                    status: (cols[8] || 'pendente').toLowerCase()
+                                };
+
+                                let diffDays = 999;
+                                if (item.prazo && item.prazo.includes('/')) {
+                                    const [d, m, y] = item.prazo.split('/');
+                                    const fullYear = y && y.length === 2 ? `20${y}` : y;
+                                    const dueDate = new Date(fullYear, m - 1, d);
+                                    if (!isNaN(dueDate.getTime())) {
+                                        const diffTime = dueDate.getTime() - today.getTime();
+                                        diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                                    }
+                                }
+
+                                let urgency = 'normal';
+                                const isDone = item.status.includes('pago') || item.status.includes('conclu') || item.status.includes('entregue');
+                                
+                                if (!isDone) {
+                                    if (diffDays < 0) urgency = 'atrasado';
+                                    else if (diffDays <= 2) urgency = 'alerta';
+                                } else {
+                                    urgency = 'entregue';
+                                }
+
+                                return { ...item, diffDays, urgency };
+                            });
+                        
+                        setTaxes(parsedData);
+                        setLoading(false);
+                        success = true;
+                        setProxyIndex(currentTryProxy); // Salva o proxy que funcionou
+                        break; 
+                    } catch (err) {
+                        console.warn(`Tentativa ${i+1} falhou com proxy ${currentTryProxy}:`, err.message);
+                        currentTryProxy = (currentTryProxy + 1) % PROXIES.length;
+                        // Espera um pouco antes de trocar de proxy (backoff)
+                        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+                    }
+                }
+
+                if (!success) {
+                    setErrorMsg("Conexão instável. Tentando restabelecer link...");
+                    // Se falhou tudo, o setInterval tentará novamente em 1 minuto
                 }
             }, [proxyIndex, selectedGid]);
 
             useEffect(() => {
                 fetchSheetData();
-                const dataTimer = setInterval(fetchSheetData, 60000);
+                const dataTimer = setInterval(() => fetchSheetData(), 60000);
                 const clockTimer = setInterval(() => setCurrentTime(new Date()), 1000);
                 return () => { clearInterval(dataTimer); clearInterval(clockTimer); };
             }, [fetchSheetData]);
@@ -157,19 +191,20 @@
             }, [totalPages, currentPage]);
 
             useEffect(() => {
-                if (totalPages <= 1 || isPaused) return;
+                if (totalPages <= 1 || isPaused || loading) return;
                 const pageTimer = setInterval(() => {
                     setCurrentPage(prev => (prev + 1) % totalPages);
                 }, SECONDS_PER_PAGE * 1000);
                 return () => clearInterval(pageTimer);
-            }, [totalPages, isPaused, criticalItems.length]);
+            }, [totalPages, isPaused, loading]);
 
             const handleCompetenceChange = (e) => {
                 const newGid = e.target.value;
                 setSelectedGid(newGid);
                 localStorage.setItem('gocase_selected_gid', newGid);
-                setCurrentPage(0);
+                setTaxes([]);
                 setLoading(true);
+                fetchSheetData(newGid);
             };
 
             const currentDisplayItems = criticalItems.slice(
@@ -178,8 +213,25 @@
             );
 
             return (
-                <div className="h-screen flex flex-col p-6 lg:p-8 bg-[#F3F4F6]">
+                <div className="h-screen flex flex-col p-6 lg:p-8 bg-[#F3F4F6] relative">
                     
+                    {loading && taxes.length === 0 && (
+                        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center loading-overlay">
+                            <div className="w-16 h-16 border-4 border-[#FF2A7F] border-t-transparent rounded-full animate-spin mb-4"></div>
+                            <p className="text-[#FF2A7F] font-black uppercase tracking-widest animate-pulse text-xl text-center px-10">
+                                {errorMsg ? errorMsg : `Sincronizando ${CONFIG_COMPETENCIAS.find(c => c.id === selectedGid)?.nome}...`}
+                            </p>
+                            {errorMsg && (
+                                <button 
+                                    onClick={() => { setLoading(true); fetchSheetData(); }} 
+                                    className="mt-6 px-8 py-3 bg-black text-white rounded-full font-bold uppercase text-sm hover:scale-105 transition-transform"
+                                >
+                                    Reconectar Manualmente
+                                </button>
+                            )}
+                        </div>
+                    )}
+
                     <header className="flex justify-between items-center mb-6 bg-white p-6 rounded-[2rem] shadow-sm border border-slate-100 relative">
                         <div className="flex items-center gap-4">
                             <div className="bg-black text-white px-6 py-3 rounded-full font-black text-3xl tracking-tighter flex items-center gap-2">
@@ -193,13 +245,12 @@
                         </div>
                         
                         <div className="text-right flex items-center gap-6">
-                            
-                            <div className="flex flex-col justify-center bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 shadow-sm min-w-[180px]">
-                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest text-left">Aba Competência</p>
+                            <div className="flex flex-col justify-center bg-slate-50 px-4 py-2 rounded-xl border border-slate-200 shadow-sm min-w-[220px]">
+                                <p className="text-slate-400 text-[9px] font-black uppercase mb-0.5 tracking-widest text-left">Aba Ativa</p>
                                 <select 
                                     value={selectedGid}
                                     onChange={handleCompetenceChange}
-                                    className="bg-transparent border-none text-[#FF2A7F] font-black outline-none cursor-pointer text-sm p-0 focus:ring-0 uppercase tracking-tight"
+                                    className="bg-transparent border-none text-[#FF2A7F] font-black outline-none cursor-pointer text-base p-0 focus:ring-0 uppercase tracking-tight"
                                 >
                                     {CONFIG_COMPETENCIAS.map(comp => (
                                         <option key={comp.id} value={comp.id} className="text-slate-800 font-bold">{comp.nome}</option>
@@ -218,7 +269,7 @@
                                 </div>
                             </div>
                             <div className="w-px h-10 bg-slate-200"></div>
-                            <div className="text-5xl font-black text-black tracking-tighter">
+                            <div className="text-5xl font-black text-black tracking-tighter min-w-[150px]">
                                 {currentTime.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                             </div>
                         </div>
@@ -227,8 +278,8 @@
                     <div className="flex-1 flex flex-col gap-6 overflow-hidden">
                         
                         <div className="grid grid-cols-4 gap-6 shrink-0">
-                            <SummaryCard title="Eficiência (I3)" value={meta.efficiency} color="pink" />
-                            <SummaryCard title="Total de Obrigações (B3)" value={meta.qtdTotal} color="dark" />
+                            <SummaryCard title={`Eficiência - ${CONFIG_COMPETENCIAS.find(c => c.id === selectedGid)?.nome}`} value={meta.efficiency} color="pink" />
+                            <SummaryCard title="Obrigações na Aba" value={meta.qtdTotal} color="dark" />
                             <SummaryCard title="Atenção (2 dias)" value={taxes.filter(t => t.urgency === 'alerta').length} color="yellow" />
                             <SummaryCard title="Atrasadas" value={taxes.filter(t => t.urgency === 'atrasado').length} color="red" />
                         </div>
@@ -246,11 +297,15 @@
 
                             <div className="px-8 py-5 border-b border-slate-100 flex justify-between items-center bg-white">
                                 <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center">
-                                        <svg className="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${criticalItems.length > 0 ? 'bg-red-100' : 'bg-green-100'}`}>
+                                        <svg className={`w-5 h-5 ${criticalItems.length > 0 ? 'text-red-500' : 'text-green-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d={criticalItems.length > 0 ? "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" : "M5 13l4 4L19 7"}></path>
+                                        </svg>
                                     </div>
-                                    <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Status da Aba Selecionada</h2>
-                                    {loading && <span className="text-xs font-bold text-slate-400 animate-pulse ml-4">Carregando dados da aba...</span>}
+                                    <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Obrigações Pendentes</h2>
+                                    <span className="text-xs font-bold text-slate-400 ml-4 px-3 py-1 bg-slate-50 rounded-full border border-slate-100 uppercase">
+                                        Monitorando: {CONFIG_COMPETENCIAS.find(c => c.id === selectedGid)?.nome}
+                                    </span>
                                 </div>
                                 
                                 <div className="flex items-center gap-4">
@@ -264,7 +319,7 @@
                                             <button 
                                                 onClick={() => setIsPaused(!isPaused)} 
                                                 className={`px-3 py-2 rounded-lg transition-all font-bold text-xs uppercase flex items-center gap-1 ${isPaused ? 'bg-[#FF2A7F] text-white shadow-md' : 'text-slate-500 hover:bg-white'}`} >
-                                                {isPaused ? 'Fixado' : 'Pausar'}
+                                                {isPaused ? 'Fixado' : 'Rodar'}
                                             </button>
                                             <button 
                                                 onClick={() => { setCurrentPage(prev => (prev + 1) % totalPages); setIsPaused(true); }} 
@@ -287,14 +342,23 @@
                                 <div className="col-span-2 text-right">Responsável</div>
                             </div>
 
-                            <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-center">
+                            <div className="flex-1 px-4 py-4 overflow-hidden flex flex-col justify-center relative">
+                                {loading && taxes.length > 0 && (
+                                    <div className="absolute inset-0 bg-white/60 z-10 flex items-center justify-center">
+                                        <div className="flex items-center gap-3">
+                                            <div className="w-4 h-4 border-2 border-[#FF2A7F] border-t-transparent rounded-full animate-spin"></div>
+                                            <div className="text-[#FF2A7F] font-bold text-sm uppercase tracking-widest">Sincronizando...</div>
+                                        </div>
+                                    </div>
+                                )}
+                                
                                 {criticalItems.length > 0 ? (
                                     <div className="flex flex-col gap-3">
                                         {currentDisplayItems.map((tax, idx) => (
                                             <div 
-                                                key={`${tax.id}-${currentPage}`} 
+                                                key={`${tax.id}-${selectedGid}-${currentPage}-${idx}`} 
                                                 className="grid grid-cols-12 gap-4 px-6 py-5 bg-white rounded-2xl border border-slate-100 shadow-sm items-center animate-slide"
-                                                style={{ animationDelay: `${idx * 0.1}s` }}
+                                                style={{ animationDelay: `${idx * 0.05}s` }}
                                             >
                                                 <div className="col-span-3">
                                                     <p className="text-base font-bold text-slate-800 uppercase truncate">{tax.empresa}</p>
@@ -333,8 +397,8 @@
                                                 <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mb-6">
                                                     <svg className="w-12 h-12 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
                                                 </div>
-                                                <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-2">Tudo em dia!</h3>
-                                                <p className="text-slate-500 font-medium italic">Nenhuma obrigação crítica nesta aba.</p>
+                                                <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tight mb-2">Sem Pendências!</h3>
+                                                <p className="text-slate-500 font-medium italic text-center">Tudo verificado na aba {CONFIG_COMPETENCIAS.find(c => c.id === selectedGid)?.nome}.</p>
                                             </>
                                         )}
                                     </div>
@@ -358,7 +422,7 @@
 
             return (
                 <div className={`p-6 rounded-[2rem] border shadow-sm flex flex-col justify-center h-36 ${themeClass}`}>
-                    <span className={`text-xs font-bold uppercase tracking-widest mb-2 ${textClassNames}`}>{title}</span>
+                    <span className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${textClassNames}`}>{title}</span>
                     <div className="text-5xl font-black tracking-tighter">{value}</div>
                 </div>
             );
