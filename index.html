@@ -38,8 +38,7 @@
                 { label: "Fev-2026", gid: "802166840" }
             ],
             ITEMS_PER_PAGE: 5,
-            ROTATION_INTERVAL: 10000,
-            LOGO_URL: "image_122a16.png"
+            ROTATION_INTERVAL: 10000
         };
 
         const VIEW_MODES = ['CONCLUÍDO', 'NO PRAZO', 'ATRASADO'];
@@ -160,11 +159,11 @@
 
             return (
                 <div className="h-screen p-10 flex flex-col gap-8">
-                    {/* Header com Logo e Nome Atualizado */}
+                    {/* Header sem Logo */}
                     <div className="flex justify-between items-start">
                         <div className="flex items-center gap-6">
-                            <div className="bg-white p-3 rounded-2xl flex items-center justify-center shadow-lg border border-zinc-100 pulse-blue">
-                                <img src={CONFIG.LOGO_URL} alt="GoGroup Logo" className="h-12 w-auto object-contain" />
+                            <div className="w-16 h-16 bg-blue-600 rounded-[2rem] flex items-center justify-center shadow-xl shadow-blue-100 pulse-blue">
+                                <i data-lucide="shield-check" className="text-white w-8 h-8"></i>
                             </div>
                             <div>
                                 <h1 className="text-5xl font-black text-zinc-900 tracking-tighter leading-none">GoGroup<span className="text-blue-600">.</span>Tax</h1>
@@ -278,7 +277,7 @@
                     <div className="flex justify-end items-center">
                         <div className="text-[10px] font-black text-zinc-300 uppercase tracking-[0.4em] flex items-center gap-3">
                             <span className="h-3 w-3 bg-blue-500 rounded-full animate-pulse"></span>
-                            GoGroup.Tax v3.0 • Continuous Sync
+                            GoGroup.Tax v3.1 • Continuous Sync
                         </div>
                     </div>
                 </div>
