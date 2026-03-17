@@ -20,7 +20,7 @@
         .sync-loader-fill { height: 100%; background: var(--brand-pink); transition: width 0.5s ease; }
         .fade-slide-up { animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-        .status-badge { padding: 4px 12px; border-radius: 12px; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; }
+        .status-badge { padding: 6px 16px; border-radius: 14px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; }
         .pulse-pink { animation: pulsePink 2s infinite; }
         @keyframes pulsePink { 0% { box-shadow: 0 0 0 0 rgba(255, 77, 173, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(255, 77, 173, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 77, 173, 0); } }
     </style>
@@ -32,14 +32,13 @@
         const { useState, useEffect, useMemo, useCallback } = React;
 
         const CONFIG = {
-            // URL base limpa para evitar erro 400 na concatenação de parâmetros
             BASE_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub",
             COMPETENCIAS: [
                 { label: "Jan-2026", gid: "1069538796" }, 
                 { label: "Fev-2026", gid: "802166840" }
             ],
             ITEMS_PER_PAGE: 5,
-            ROTATION_INTERVAL: 8000 
+            ROTATION_INTERVAL: 30000 // Alterado para 30 segundos
         };
 
         function App() {
@@ -54,9 +53,7 @@
             const parseCSV = (text) => {
                 const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
                 if (lines.length <= 1) return [];
-
                 const separator = lines[0].includes(';') ? ';' : ',';
-                
                 return lines.map(line => {
                     const row = [];
                     let curr = "", inQuotes = false;
@@ -75,42 +72,30 @@
                 setLoading(true);
                 setError(null);
                 try {
-                    // Construção exata da URL combinando o link com parâmetros de aba (gid)
                     const targetUrl = `${CONFIG.BASE_URL}?output=csv&single=true&gid=${activeTab.gid}&t=${Date.now()}`;
-                    
                     const response = await fetch(targetUrl);
                     if (!response.ok) throw new Error(`Conexão falhou (${response.status})`);
-                    
                     const text = await response.text();
-                    
-                    // Verifica se o retorno não é uma página HTML de erro/login corporativo
                     if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
-                        throw new Error("A planilha não está acessível publicamente ou requer login corporativo.");
+                        throw new Error("A planilha requer login ou não está publicada corretamente.");
                     }
-
                     const rows = parseCSV(text);
                     if (rows.length <= 1) {
                         setData([]);
                         return;
                     }
-
-                    // A primeira linha (índice 0) é o cabeçalho, os dados começam na linha 1
                     const dataRows = rows.slice(1);
-
-                    // Mapeamento das colunas A até I com limpeza de aspas residuais
                     const formatted = dataRows.map((r, i) => ({
                         id: `row-${i}-${activeTab.gid}`,
-                        empresa: r[0] ? r[0].replace(/^"|"$/g, '').trim() : "",         // Coluna A
-                        uf: r[1] ? r[1].replace(/^"|"$/g, '').trim() : "--",            // Coluna B
-                        regime: r[2] ? r[2].replace(/^"|"$/g, '').trim() : "--",        // Coluna C
-                        tipo: r[3] ? r[3].replace(/^"|"$/g, '').trim() : "--",          // Coluna D
-                        obrigacao: r[4] ? r[4].replace(/^"|"$/g, '').trim() : "--",     // Coluna E
-                        prazo: r[5] ? r[5].replace(/^"|"$/g, '').trim() : "--/--",      // Coluna F
-                        situacao: (r[6] || "PENDENTE").replace(/^"|"$/g, '').trim().toUpperCase(), // Coluna G
-                        responsavel: r[7] ? r[7].replace(/^"|"$/g, '').trim() : "N/A",  // Coluna H
-                        status: r[8] ? r[8].replace(/^"|"$/g, '').trim() : ""           // Coluna I
+                        empresa: r[0] ? r[0].replace(/^"|"$/g, '').trim() : "",
+                        uf: r[1] ? r[1].replace(/^"|"$/g, '').trim() : "--",
+                        regime: r[2] ? r[2].replace(/^"|"$/g, '').trim() : "--",
+                        tipo: r[3] ? r[3].replace(/^"|"$/g, '').trim() : "--",
+                        obrigacao: r[4] ? r[4].replace(/^"|"$/g, '').trim() : "--",
+                        prazo: r[5] ? r[5].replace(/^"|"$/g, '').trim() : "--/--",
+                        situacao: (r[6] || "PENDENTE").replace(/^"|"$/g, '').trim().toUpperCase(),
+                        responsavel: r[7] ? r[7].replace(/^"|"$/g, '').trim() : "N/A"
                     })).filter(item => item.empresa !== "" && item.empresa.toUpperCase() !== "EMPRESA");
-
                     setData(formatted);
                 } catch (e) { 
                     console.error("Erro Dashboard:", e);
@@ -118,7 +103,7 @@
                         setTimeout(() => fetchData(retryCount + 1), 2000);
                         return;
                     }
-                    setError(e.message.includes("login") ? e.message : "Erro ao sincronizar. Verifique se o link de 'Publicar na Web' está correto.");
+                    setError(e.message);
                 } finally {
                     setLoading(false);
                 }
@@ -130,12 +115,16 @@
                 return () => clearInterval(clock);
             }, [fetchData]);
 
+            // CÁLCULO DE EFICIÊNCIA: Concluídas / Total
             const metrics = useMemo(() => {
                 const total = data.length;
                 const concluidas = data.filter(i => ["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(s => i.situacao.includes(s))).length;
                 const noPrazo = data.filter(i => ["PRAZO", "PENDENTE", "ANDAMENTO", "ABERTO", "NO PRAZO"].some(s => i.situacao.includes(s))).length;
                 const atrasadas = data.filter(i => i.situacao.includes("ATRAS")).length;
-                const eficiencia = total > 0 ? Math.round(((concluidas + noPrazo) / total) * 100) : 0;
+                
+                // Nova Regra: Concluídas / Total
+                const eficiencia = total > 0 ? Math.round((concluidas / total) * 100) : 0;
+                
                 return { total, concluidas, noPrazo, atrasadas, eficiencia };
             }, [data]);
 
@@ -176,14 +165,14 @@
                             </div>
                             <div>
                                 <h1 className="text-5xl font-black text-zinc-900 tracking-tighter leading-none">Gocase<span className="text-[#FF4DAD]">.</span>Tax</h1>
-                                <p className="text-zinc-400 font-bold uppercase tracking-[0.4em] text-[9px] mt-3">Monitoramento Fiscal</p>
+                                <p className="text-zinc-400 font-bold uppercase tracking-[0.4em] text-[9px] mt-3">Monitoramento de Eficiência</p>
                             </div>
                         </div>
 
                         <div className="bg-white p-6 rounded-[2.5rem] border border-zinc-100 shadow-sm flex items-center gap-10">
                             <div className="text-right">
-                                <p className="text-[10px] font-black text-zinc-300 uppercase tracking-widest mb-1">Eficiência Geral</p>
-                                <p className={`text-4xl font-black leading-none ${metrics.eficiencia > 90 ? 'text-emerald-500' : 'text-amber-500'}`}>
+                                <p className="text-[10px] font-black text-zinc-300 uppercase tracking-widest mb-1">Taxa de Conclusão</p>
+                                <p className={`text-4xl font-black leading-none ${metrics.eficiencia > 80 ? 'text-emerald-500' : 'text-amber-500'}`}>
                                     {metrics.eficiencia}%
                                 </p>
                             </div>
@@ -197,7 +186,7 @@
                     {/* KPIs */}
                     <div className="grid grid-cols-4 gap-6">
                         <KpiCard label="Total Obrigações" value={metrics.total} icon="file-text" color="text-zinc-800" />
-                        <KpiCard label="Críticas / Atrasadas" value={metrics.atrasadas} icon="flame" color="text-rose-500" active={viewMode === 'ATRASADO'} />
+                        <KpiCard label="Atrasadas" value={metrics.atrasadas} icon="flame" color="text-rose-500" active={viewMode === 'ATRASADO'} />
                         <KpiCard label="No Prazo" value={metrics.noPrazo} icon="clock" color="text-blue-500" active={viewMode === 'NO PRAZO'} />
                         <KpiCard label="Concluídas" value={metrics.concluidas} icon="check-circle" color="text-emerald-500" active={viewMode === 'CONCLUÍDO'} />
                     </div>
@@ -212,36 +201,37 @@
                             <div className="flex items-center gap-4">
                                 <span className={`flex h-2 w-2 rounded-full ${error ? 'bg-rose-500' : 'bg-[#FF4DAD] animate-pulse'}`}></span>
                                 <p className="text-[10px] font-black uppercase tracking-[0.3em]">
-                                    {error ? `ERRO DE SINCRONIZAÇÃO` : loading ? 'SINCRONIZANDO PLANILHA...' : `FILTRO ATIVO: ${viewMode} • ${currentPage + 1}/${totalPages}`}
+                                    {error ? `ERRO NA CONEXÃO` : loading ? 'CARREGANDO DADOS...' : `EXIBINDO: ${viewMode} • PÁGINA ${currentPage + 1}/${totalPages}`}
                                 </p>
                             </div>
-                            <div className="text-[9px] font-black uppercase text-zinc-500">Gocase Digital Systems © 2026</div>
+                            <div className="text-[9px] font-black uppercase text-zinc-500 tracking-widest">Atualização a cada 30s</div>
                         </div>
 
                         <div className="flex-1 p-8 overflow-hidden">
                             {error ? (
                                 <div className="h-full flex flex-col items-center justify-center text-rose-500 gap-6 text-center">
                                     <i data-lucide="alert-triangle" className="w-16 h-16"></i>
-                                    <div>
-                                        <p className="font-black uppercase text-sm tracking-widest mb-2">{error}</p>
-                                        <p className="text-[10px] text-rose-400 font-bold max-w-md mx-auto uppercase">Certifique-se que o arquivo está publicado (Arquivo > Compartilhar > Publicar na Web > Valores separados por vírgula .csv)</p>
-                                    </div>
-                                    <button onClick={() => fetchData()} className="px-8 py-3 bg-zinc-900 text-white rounded-2xl text-[10px] font-black uppercase hover:bg-zinc-800 transition-colors">Tentar Reconectar</button>
+                                    <p className="font-black uppercase text-sm tracking-widest">{error}</p>
+                                    <button onClick={() => fetchData()} className="px-8 py-3 bg-zinc-900 text-white rounded-2xl text-[10px] font-black uppercase hover:bg-zinc-800 transition-colors">Tentar Novamente</button>
                                 </div>
                             ) : filteredItems.length > 0 ? (
-                                <div className="flex flex-col gap-4">
+                                <div className="flex flex-col gap-5">
                                     {filteredItems.slice(currentPage * CONFIG.ITEMS_PER_PAGE, (currentPage + 1) * CONFIG.ITEMS_PER_PAGE).map((item, idx) => (
-                                        <div key={item.id} className="grid grid-cols-12 px-8 py-5 bg-white rounded-3xl border border-zinc-100 items-center shadow-sm fade-slide-up" style={{ animationDelay: `${idx * 0.1}s` }}>
+                                        <div key={item.id} className="grid grid-cols-12 px-10 py-7 bg-white rounded-[2rem] border border-zinc-100 items-center shadow-sm fade-slide-up" style={{ animationDelay: `${idx * 0.1}s` }}>
                                             <div className="col-span-3">
-                                                <p className="font-black text-zinc-900 uppercase truncate text-sm leading-none">{item.empresa}</p>
-                                                <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest mt-1 inline-block">{item.uf} • {item.regime}</span>
+                                                <p className="font-black text-zinc-900 uppercase truncate text-xl leading-none mb-2">{item.empresa}</p>
+                                                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest inline-block">{item.uf} • {item.regime}</span>
                                             </div>
-                                            <div className="col-span-4 text-zinc-600 font-bold uppercase text-[10px] px-4 truncate">{item.obrigacao}</div>
+                                            <div className="col-span-4 text-zinc-700 font-extrabold uppercase text-lg px-6 truncate">
+                                                {item.obrigacao}
+                                            </div>
                                             <div className="col-span-2 text-center">
-                                                <span className="font-mono font-bold text-zinc-800 bg-zinc-50 px-4 py-1.5 rounded-lg border border-zinc-100 text-sm">{item.prazo}</span>
+                                                <span className="font-mono font-black text-zinc-800 bg-zinc-50 px-6 py-3 rounded-xl border border-zinc-100 text-xl tracking-tighter">
+                                                    {item.prazo}
+                                                </span>
                                             </div>
                                             <div className="col-span-3 text-right">
-                                                <p className="text-[9px] font-black text-zinc-400 uppercase mb-1">{item.responsavel}</p>
+                                                <p className="text-[11px] font-black text-zinc-400 uppercase mb-2 tracking-tighter">{item.responsavel}</p>
                                                 <StatusLabel text={item.situacao} />
                                             </div>
                                         </div>
@@ -250,7 +240,7 @@
                             ) : (
                                 <div className="h-full flex flex-col items-center justify-center text-zinc-200 gap-4">
                                     <i data-lucide="inbox" className="w-16 h-16"></i>
-                                    <p className="font-black uppercase text-xs tracking-[0.3em]">Nenhum registro para exibir neste filtro</p>
+                                    <p className="font-black uppercase text-xs tracking-[0.3em]">Nenhum dado encontrado</p>
                                 </div>
                             )}
                         </div>
@@ -261,14 +251,14 @@
                         <div className="flex gap-2 bg-white p-2 rounded-3xl shadow-sm border border-zinc-100">
                             {CONFIG.COMPETENCIAS.map(c => (
                                 <button key={c.gid} onClick={() => { setActiveTab(c); setCurrentPage(0); }} 
-                                    className={`px-10 py-3 rounded-2xl text-[10px] font-black uppercase transition-all ${activeTab.gid === c.gid ? 'bg-zinc-900 text-white shadow-xl' : 'text-zinc-400 hover:bg-zinc-50'}`}>
+                                    className={`px-10 py-4 rounded-2xl text-[11px] font-black uppercase transition-all ${activeTab.gid === c.gid ? 'bg-zinc-900 text-white shadow-xl scale-105' : 'text-zinc-400 hover:bg-zinc-50'}`}>
                                     {c.label}
                                 </button>
                             ))}
                         </div>
-                        <div className="text-[9px] font-black text-zinc-300 uppercase tracking-[0.4em] flex items-center gap-3">
-                            <span className="h-2 w-2 bg-emerald-500 rounded-full animate-pulse"></span>
-                            Auto-Refresh Ativo
+                        <div className="text-[10px] font-black text-zinc-300 uppercase tracking-[0.4em] flex items-center gap-3">
+                            <span className="h-3 w-3 bg-emerald-500 rounded-full animate-pulse"></span>
+                            Monitor Ativo • Gocase Digital
                         </div>
                     </div>
                 </div>
@@ -277,12 +267,12 @@
 
         function KpiCard({ label, value, icon, color, active }) {
             return (
-                <div className={`premium-card p-7 flex flex-col gap-2 transition-all duration-500 ${active ? 'ring-2 ring-[#FF4DAD] scale-105 shadow-xl shadow-pink-50' : 'opacity-40 hover:opacity-60'}`}>
+                <div className={`premium-card p-8 flex flex-col gap-2 transition-all duration-500 ${active ? 'ring-4 ring-[#FF4DAD]/20 scale-105 shadow-2xl shadow-pink-100' : 'opacity-50 hover:opacity-70'}`}>
                     <div className="flex justify-between items-center mb-1">
-                        <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{label}</p>
-                        <i data-lucide={icon} className={`w-4 h-4 ${active ? 'text-[#FF4DAD]' : 'text-zinc-300'}`}></i>
+                        <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{label}</p>
+                        <i data-lucide={icon} className={`w-5 h-5 ${active ? 'text-[#FF4DAD]' : 'text-zinc-300'}`}></i>
                     </div>
-                    <p className={`text-4xl font-black tracking-tighter ${color}`}>{value}</p>
+                    <p className={`text-5xl font-black tracking-tighter ${color}`}>{value}</p>
                 </div>
             );
         }
@@ -290,11 +280,11 @@
         function StatusLabel({ text }) {
             const s = text.toUpperCase();
             let colorClass = "bg-zinc-100 text-zinc-400 border-zinc-200";
-            if (["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(st => s.includes(st))) colorClass = "bg-emerald-50 text-emerald-600 border-emerald-100";
-            if (s.includes("ATRAS")) colorClass = "bg-rose-50 text-rose-600 border-rose-100";
-            if (["PRAZO", "PENDENTE", "ANDAMENTO", "ABERTO", "NO PRAZO"].some(st => s.includes(st))) colorClass = "bg-blue-50 text-blue-600 border-blue-100";
+            if (["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(st => s.includes(st))) colorClass = "bg-emerald-50 text-emerald-600 border-emerald-200";
+            else if (s.includes("ATRAS")) colorClass = "bg-rose-50 text-rose-600 border-rose-200";
+            else if (["PRAZO", "PENDENTE", "ANDAMENTO", "ABERTO", "NO PRAZO"].some(st => s.includes(st))) colorClass = "bg-blue-50 text-blue-600 border-blue-200";
 
-            return <span className={`status-badge border ${colorClass}`}>{text}</span>;
+            return <span className={`status-badge border-2 ${colorClass}`}>{text}</span>;
         }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
