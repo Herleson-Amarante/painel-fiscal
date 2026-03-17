@@ -17,7 +17,7 @@
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         .premium-card { background: #FFFFFF; border: 1px solid #F1F3F5; border-radius: 2.5rem; box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.03); }
         .sync-loader { height: 4px; background: #F1F3F5; position: relative; overflow: hidden; }
-        .sync-loader-fill { height: 100%; background: var(--brand-pink); transition: width 0.5s linear; }
+        .sync-loader-fill { height: 100%; background: var(--brand-pink); transition: width 10s linear; }
         .fade-slide-up { animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
         .status-badge { padding: 6px 16px; border-radius: 14px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -38,7 +38,7 @@
                 { label: "Fev-2026", gid: "802166840" }
             ],
             ITEMS_PER_PAGE: 5,
-            ROTATION_INTERVAL: 10000 // Alterado para 10 segundos
+            ROTATION_INTERVAL: 10000 // 10 Segundos
         };
 
         const VIEW_MODES = ['CONCLUÍDO', 'NO PRAZO', 'ATRASADO'];
@@ -51,6 +51,7 @@
             const [viewMode, setViewMode] = useState('CONCLUÍDO'); 
             const [currentPage, setCurrentPage] = useState(0);
             const [time, setTime] = useState(new Date());
+            const [key, setKey] = useState(0); // Para resetar animação da barra de progresso
 
             const parseCSV = (text) => {
                 const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
@@ -134,17 +135,18 @@
 
             const totalPages = Math.ceil(filteredItems.length / CONFIG.ITEMS_PER_PAGE) || 1;
 
-            // Lógica de Rotação Automática (10 Segundos)
+            // Lógica de Rotação Automática Ininterrupta
             useEffect(() => {
                 if (loading || error) return;
                 
                 const interval = setInterval(() => {
+                    setKey(prev => prev + 1); // Reinicia barra de progresso visual
                     setCurrentPage(prev => {
-                        // Se houver próxima página no modo atual
+                        // Se houver próxima página disponível no filtro atual
                         if (prev < totalPages - 1) {
                             return prev + 1;
                         } else {
-                            // Se chegou ao fim das páginas do modo atual, muda para o próximo status
+                            // Fim das páginas do filtro atual -> Próximo status (Ininterrupto)
                             setViewMode(current => {
                                 const currentIndex = VIEW_MODES.indexOf(current);
                                 const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
@@ -196,7 +198,7 @@
                         </div>
                     </div>
 
-                    {/* KPIs na nova ordem solicitada */}
+                    {/* KPIs */}
                     <div className="grid grid-cols-4 gap-6">
                         <KpiCard 
                             label="Total Obrigações" 
@@ -214,17 +216,20 @@
                     {/* Monitor Table */}
                     <div className="flex-1 premium-card flex flex-col overflow-hidden relative">
                         <div className="sync-loader">
-                            <div className="sync-loader-fill" style={{ width: loading ? '100%' : '0%' }}></div>
+                            <div key={key} className="sync-loader-fill" style={{ width: loading ? '0%' : '100%' }}></div>
                         </div>
 
                         <div className="bg-zinc-900 px-12 py-4 flex justify-between items-center text-white">
                             <div className="flex items-center gap-4">
                                 <span className={`flex h-2 w-2 rounded-full ${error ? 'bg-rose-500' : 'bg-[#FF4DAD] animate-pulse'}`}></span>
                                 <p className="text-[10px] font-black uppercase tracking-[0.3em]">
-                                    {error ? `ERRO NA CONEXÃO` : loading ? 'CARREGANDO DADOS...' : `STATUS: ${viewMode} • PÁGINA ${currentPage + 1}/${totalPages}`}
+                                    {error ? `ERRO NA CONEXÃO` : loading ? 'CARREGANDO DADOS...' : `STATUS ATUAL: ${viewMode} • PÁGINA ${currentPage + 1}/${totalPages}`}
                                 </p>
                             </div>
-                            <div className="text-[9px] font-black uppercase text-zinc-500 tracking-widest">Rotação Automática: 10s</div>
+                            <div className="text-[9px] font-black uppercase text-zinc-500 tracking-widest flex items-center gap-2">
+                                <i data-lucide="refresh-cw" className="w-3 h-3 animate-spin"></i>
+                                Rotação Automática Ativa
+                            </div>
                         </div>
 
                         <div className="flex-1 p-8 overflow-hidden">
@@ -259,9 +264,14 @@
                                 </div>
                             ) : (
                                 <div className="h-full flex flex-col items-center justify-center text-zinc-200 gap-4">
-                                    <i data-lucide="inbox" className="w-16 h-16"></i>
-                                    <p className="font-black uppercase text-xs tracking-[0.3em]">Sem registros em {viewMode}</p>
-                                    <p className="text-[10px] text-zinc-400 font-bold uppercase">Alternando automaticamente...</p>
+                                    <div className="relative">
+                                        <i data-lucide="inbox" className="w-20 h-20 text-zinc-100"></i>
+                                        <div className="absolute -top-1 -right-1 h-6 w-6 bg-[#FF4DAD] rounded-full flex items-center justify-center animate-bounce">
+                                            <i data-lucide="search" className="w-3 h-3 text-white"></i>
+                                        </div>
+                                    </div>
+                                    <p className="font-black uppercase text-xs tracking-[0.4em] text-zinc-300">Nenhum registro em "{viewMode}"</p>
+                                    <p className="text-[9px] text-zinc-400 font-black uppercase tracking-widest bg-zinc-50 px-4 py-2 rounded-lg">Próximo status em instantes...</p>
                                 </div>
                             )}
                         </div>
@@ -270,7 +280,7 @@
                     <div className="flex justify-end items-center">
                         <div className="text-[10px] font-black text-zinc-300 uppercase tracking-[0.4em] flex items-center gap-3">
                             <span className="h-3 w-3 bg-emerald-500 rounded-full animate-pulse"></span>
-                            Monitor Gocase Tax v2.6
+                            Continuous Monitoring v2.7 • Gocase Tax
                         </div>
                     </div>
                 </div>
