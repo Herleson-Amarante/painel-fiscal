@@ -1,346 +1,375 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { 
-  Search, 
-  Calendar, 
-  CheckCircle2, 
-  Clock, 
-  AlertCircle, 
-  RefreshCw, 
-  FileText,
-  WifiOff,
-  Filter,
-  ArrowRight
-} from 'lucide-react';
-
-// URL base da planilha publicada como CSV
-const SHEET_BASE_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv";
-
-// Mapeamento de GIDs atualizado conforme solicitado
-const COMPETENCIAS = [
-  { label: "Geral", gid: "802166840" }, 
-  { label: "Jan-2026", gid: "0" },
-  { label: "Fev-2026", gid: "1165184281" }
-];
-
-const App = () => {
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [competenciaAtiva, setCompetenciaAtiva] = useState(COMPETENCIAS[0]); 
-  const [filtroSituacao, setFiltroSituacao] = useState('TODOS');
-  const [busca, setBusca] = useState('');
-
-  const parseCSV = (text) => {
-    if (!text || typeof text !== 'string') return [];
-    const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
-    return lines.map(line => {
-      const cols = [];
-      let curr = "";
-      let inQuotes = false;
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') inQuotes = !inQuotes;
-        else if ((char === ',' || char === ';') && !inQuotes) {
-          cols.push(curr.trim());
-          curr = "";
-        } else {
-          curr += char;
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gocase Tax | Intelligence Dashboard</title>
+    <!-- Scripts Necessários -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800;900&family=JetBrains+Mono:wght@700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        :root { 
+            --brand-pink: #FF4DAD; 
+            --bg-main: #FDFDFF;
         }
-      }
-      cols.push(curr.trim());
-      return cols;
-    });
-  };
+        body { 
+            background-color: var(--bg-main); 
+            font-family: 'Inter', sans-serif; 
+            overflow: hidden; /* Ideal para modo TV/Dashboard */
+        }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        
+        /* Efeito de Vidro e Sombras Premium */
+        .premium-card { 
+            background: #FFFFFF; 
+            border: 1px solid #F1F3F5;
+            border-radius: 2.5rem;
+            box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.03);
+        }
 
-  const fetchData = async (retryCount = 0) => {
-    setLoading(true);
-    setError(null);
-    try {
-      // Simplificamos a URL e adicionamos um timestamp único para evitar cache
-      const url = `${SHEET_BASE_URL}&gid=${competenciaAtiva.gid}&cache=${Date.now()}`;
-      
-      // Removidos headers complexos que costumam causar erros de CORS em sandboxes
-      const response = await fetch(url);
+        /* Barra de Progresso de Sincronização */
+        .sync-loader {
+            height: 4px;
+            background: #F1F3F5;
+            position: relative;
+            overflow: hidden;
+        }
+        .sync-loader-fill {
+            height: 100%;
+            background: var(--brand-pink);
+            transition: width 0.5s ease;
+        }
 
-      if (!response.ok) {
-        throw new Error(`Erro de resposta: ${response.status} ${response.statusText}`);
-      }
-      
-      const text = await response.text();
-      
-      // Verifica se o Google retornou HTML (página de login ou erro) em vez de CSV
-      if (text.trim().startsWith('<!DOCTYPE html>')) {
-        throw new Error("A planilha não está acessível. Verifique se ela foi 'Publicada na Web' corretamente como CSV.");
-      }
+        /* Animações de Transição de Dados */
+        .fade-slide-up {
+            animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        @keyframes fadeSlideUp {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
 
-      const rows = parseCSV(text);
+        /* Scanline para efeito de "Live Data" */
+        .scanline {
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 77, 173, 0.05), transparent);
+            animation: scan 3s linear infinite;
+        }
+        @keyframes scan {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
 
-      // Busca o cabeçalho "Empresa" ignorando maiúsculas/minúsculas
-      const headerIdx = rows.findIndex(r => r[0] && r[0].toLowerCase().includes('empresa'));
-      
-      if (headerIdx === -1) {
-        setData([]);
-        return;
-      }
+    <script type="text/babel">
+        const { useState, useEffect, useMemo, useCallback } = React;
 
-      const formattedData = rows.slice(headerIdx + 1)
-        .map((cols, i) => {
-          const clean = (val) => (val || '').replace(/^"|"$/g, '').trim();
+        // Configurações da Planilha
+        const CONFIG = {
+            BASE_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv",
+            COMPETENCIAS: [
+                { label: "Geral", gid: "802166840" },
+                { label: "Jan-2026", gid: "0" },
+                { label: "Fev-2026", gid: "1165184281" }
+            ],
+            PROXIES: [
+                (url) => url, // Direto
+                (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+                (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
+            ]
+        };
 
-          return {
-            id: `row-${competenciaAtiva.gid}-${i}`,
-            empresa: clean(cols[0]),
-            uf: clean(cols[1]),
-            regime: clean(cols[2]),
-            tipo: clean(cols[3]),
-            obrigacao: clean(cols[4]),
-            prazo: clean(cols[5]),
-            situacao: clean(cols[6]) || 'PENDENTE',
-            responsavel: clean(cols[7]),
-            status: clean(cols[8])
-          };
-        })
-        .filter(item => item.empresa && item.empresa.length > 1);
+        function App() {
+            const [data, setData] = useState([]);
+            const [activeTab, setActiveTab] = useState(CONFIG.COMPETENCIAS[0]);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [viewMode, setViewMode] = useState('ATRASADO'); // Ciclo: ATRASADO -> PRAZO -> CONCLUIDO
+            const [time, setTime] = useState(new Date());
 
-      setData(formattedData);
-    } catch (err) {
-      console.error("Erro no carregamento:", err);
-      
-      // Tenta novamente uma vez se falhar (pode ser instabilidade momentânea)
-      if (retryCount < 1) {
-        setTimeout(() => fetchData(retryCount + 1), 1000);
-      } else {
-        setError("Não foi possível conectar à planilha. Isso pode ser um bloqueio de segurança (CORS) ou link offline.");
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+            // Parser de CSV Robusto
+            const parseCSV = (text) => {
+                const lines = text.split(/\r?\n/).filter(l => l.trim() !== "");
+                return lines.map(line => {
+                    const row = [];
+                    let curr = "";
+                    let inQuotes = false;
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === '"') inQuotes = !inQuotes;
+                        else if ((char === ',' || char === ';') && !inQuotes) {
+                            row.push(curr.trim());
+                            curr = "";
+                        } else {
+                            curr += char;
+                        }
+                    }
+                    row.push(curr.trim());
+                    return row;
+                });
+            };
 
-  useEffect(() => {
-    fetchData();
-  }, [competenciaAtiva]);
+            // Função de Fetch com Fallback de Proxy (Anti-CORS)
+            const fetchData = useCallback(async () => {
+                setLoading(true);
+                const url = `${CONFIG.BASE_URL}&gid=${activeTab.gid}&t=${Date.now()}`;
+                
+                let success = false;
+                for (const proxy of CONFIG.PROXIES) {
+                    try {
+                        const response = await fetch(proxy(url));
+                        if (response.ok) {
+                            const text = await response.text();
+                            if (text.includes('<!DOCTYPE html>')) continue;
 
-  const filteredData = useMemo(() => {
-    return data.filter(item => {
-      const situacaoNormalizada = (item.situacao || '').toUpperCase();
-      let matchSituacao = filtroSituacao === 'TODOS' || situacaoNormalizada.includes(filtroSituacao.toUpperCase());
-      
-      const termo = busca.toLowerCase();
-      const matchBusca = 
-        (item.empresa || '').toLowerCase().includes(termo) || 
-        (item.obrigacao || '').toLowerCase().includes(termo) ||
-        (item.uf || '').toLowerCase().includes(termo);
+                            const rows = parseCSV(text);
+                            // Identifica o cabeçalho para começar o mapeamento
+                            const headerIdx = rows.findIndex(r => r[0] && r[0].toLowerCase().includes('empresa'));
+                            const startIdx = headerIdx === -1 ? 1 : headerIdx + 1;
 
-      return matchSituacao && matchBusca;
-    });
-  }, [data, filtroSituacao, busca]);
+                            const formatted = rows.slice(startIdx)
+                                .filter(r => r[0] && r[0].length > 1)
+                                .map((r, i) => ({
+                                    id: `${activeTab.gid}-${i}`,
+                                    empresa: r[0],
+                                    uf: r[1] || "--",
+                                    regime: r[2] || "",
+                                    tipo: r[3] || "",
+                                    obrigacao: r[4] || "",
+                                    prazo: r[5] || "",
+                                    situacao: (r[6] || "PENDENTE").toUpperCase(),
+                                    responsavel: r[7] || "",
+                                    status: r[8] || ""
+                                }));
 
-  const stats = useMemo(() => {
-    return {
-      total: data.length,
-      concluidas: data.filter(i => (i.situacao || '').toUpperCase().includes('CONCLU')).length,
-      noPrazo: data.filter(i => {
-        const s = (i.situacao || '').toUpperCase();
-        return s.includes('PRAZO') || s.includes('PENDENTE');
-      }).length,
-      atrasadas: data.filter(i => (i.situacao || '').toUpperCase().includes('ATRAS')).length
-    };
-  }, [data]);
+                            setData(formatted);
+                            setError(null);
+                            success = true;
+                            break;
+                        }
+                    } catch (e) {
+                        console.warn("Falha no carregamento via proxy");
+                    }
+                }
 
-  return (
-    <div className="min-h-screen bg-[#FDFDFF] text-slate-800 font-sans p-4 md:p-8">
-      <header className="max-w-7xl mx-auto flex flex-col lg:flex-row justify-between items-start lg:items-center gap-8 mb-12">
-        <div className="flex items-center gap-4">
-          <div className="w-14 h-14 bg-[#FF4DAD] rounded-[1.25rem] flex items-center justify-center shadow-xl shadow-pink-100">
-            <FileText className="text-white" size={32} />
-          </div>
-          <div>
-            <h1 className="text-4xl font-black tracking-tighter text-slate-900">
-              Gocase<span className="text-[#FF4DAD]">.</span>Tax
-            </h1>
-            <p className="text-slate-400 text-[10px] font-black uppercase tracking-[0.25em] flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              Gestão Fiscal Centralizada
-            </p>
-          </div>
-        </div>
+                if (!success) setError("Erro ao conectar à folha de cálculo. Verifique a rede.");
+                setLoading(false);
+            }, [activeTab]);
 
-        <div className="flex flex-wrap items-center gap-2 bg-white p-2 rounded-[2rem] shadow-sm border border-slate-100">
-          {COMPETENCIAS.map(mes => (
-            <button
-              key={mes.gid}
-              onClick={() => setCompetenciaAtiva(mes)}
-              className={`px-8 py-3 rounded-[1.5rem] text-xs font-black uppercase tracking-wider transition-all duration-300 ${
-                competenciaAtiva.gid === mes.gid 
-                ? 'bg-[#FF4DAD] text-white shadow-lg shadow-pink-100 scale-105' 
-                : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              {mes.label}
-            </button>
-          ))}
-          <div className="w-px h-8 bg-slate-100 mx-2" />
-          <button 
-            onClick={() => fetchData()}
-            disabled={loading}
-            className={`p-3 text-slate-400 hover:text-[#FF4DAD] rounded-full transition-all ${loading ? 'animate-spin opacity-50' : ''}`}
-          >
-            <RefreshCw size={22} />
-          </button>
-        </div>
-      </header>
+            // Efeitos de Tempo e Sincronização
+            useEffect(() => {
+                fetchData();
+                const timer = setInterval(() => setTime(new Date()), 1000);
+                const sync = setInterval(fetchData, 60000); // Sync a cada minuto
+                return () => { clearInterval(timer); clearInterval(sync); };
+            }, [fetchData]);
 
-      <main className="max-w-7xl mx-auto">
-        {error && (
-          <div className="mb-8 bg-rose-50 border border-rose-100 rounded-[2rem] p-8 flex flex-col md:flex-row items-center gap-6 text-rose-700 animate-in fade-in zoom-in-95 duration-300">
-            <WifiOff size={32} />
-            <div className="text-center md:text-left">
-              <p className="font-black uppercase text-xs tracking-widest mb-1">Atenção</p>
-              <p className="text-lg font-bold">{error}</p>
-              <p className="text-sm opacity-80 mt-1">Isso geralmente ocorre quando o link CSV expira ou o navegador bloqueia a requisição.</p>
-            </div>
-          </div>
-        )}
+            // Efeito de Rotação Automática da Visualização (Modo Dashboard)
+            useEffect(() => {
+                const modes = ['ATRASADO', 'PRAZO', 'CONCLUÍDO'];
+                const interval = setInterval(() => {
+                    setViewMode(current => {
+                        const idx = modes.indexOf(current === 'NO PRAZO' ? 'PRAZO' : current);
+                        const next = modes[(idx + 1) % 3];
+                        return next === 'PRAZO' ? 'NO PRAZO' : next;
+                    });
+                }, 10000); // Troca a cada 10 segundos
+                return () => clearInterval(interval);
+            }, []);
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-          <StatCard label="Obrigações" value={stats.total} icon={<FileText size={26}/>} color="bg-slate-50 text-slate-400" active={filtroSituacao === 'TODOS'} onClick={() => setFiltroSituacao('TODOS')} />
-          <StatCard label="Concluídas" value={stats.concluidas} icon={<CheckCircle2 size={26}/>} color="bg-emerald-50 text-emerald-500" active={filtroSituacao === 'CONCLU'} onClick={() => setFiltroSituacao('CONCLU')} />
-          <StatCard label="No Prazo" value={stats.noPrazo} icon={<Clock size={26}/>} color="bg-blue-50 text-blue-500" active={filtroSituacao === 'PRAZO'} onClick={() => setFiltroSituacao('PRAZO')} />
-          <StatCard label="Atrasadas" value={stats.atrasadas} icon={<AlertCircle size={26}/>} color="bg-rose-50 text-rose-500" active={filtroSituacao === 'ATRAS'} onClick={() => setFiltroSituacao('ATRAS')} />
-        </div>
+            // Filtros de Dados
+            const displayItems = useMemo(() => {
+                return data.filter(item => {
+                    const s = item.situacao;
+                    if (viewMode === 'CONCLUÍDO') return s.includes('CONCLU') || s.includes('OK') || s.includes('PAGO');
+                    if (viewMode === 'NO PRAZO') return s.includes('PRAZO') || s.includes('PENDENTE') || s.includes('ANDAMENTO');
+                    return s.includes('ATRAS');
+                }).slice(0, 6); // Limite de 6 itens para não quebrar o layout da TV
+            }, [data, viewMode]);
 
-        <div className="relative mb-8 group">
-          <Search className="absolute left-7 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-[#FF4DAD]" size={26} />
-          <input 
-            type="text"
-            placeholder={`Pesquisar em ${competenciaAtiva.label}...`}
-            className="w-full pl-16 pr-8 py-7 bg-white border border-slate-100 rounded-[2.5rem] shadow-sm focus:outline-none focus:ring-4 focus:ring-[#FF4DAD]/5 transition-all text-xl font-medium"
-            value={busca}
-            onChange={(e) => setBusca(e.target.value)}
-          />
-        </div>
+            const stats = useMemo(() => ({
+                total: data.length,
+                atrasados: data.filter(i => i.situacao.includes('ATRAS')).length,
+                concluidos: data.filter(i => i.situacao.includes('CONCLU') || i.situacao.includes('OK')).length
+            }), [data]);
 
-        <div className="bg-white rounded-[3rem] border border-slate-100 shadow-2xl shadow-slate-200/30 overflow-hidden min-h-[400px]">
-          {loading ? (
-            <div className="py-56 flex flex-col items-center justify-center gap-6">
-              <div className="w-16 h-16 border-[6px] border-slate-100 border-t-[#FF4DAD] rounded-full animate-spin"></div>
-              <p className="text-slate-400 font-black tracking-[0.4em] text-[10px] uppercase">Sincronizando dados...</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-50/50 text-[10px] font-black text-slate-400 uppercase tracking-[0.25em] border-b border-slate-100">
-                    <th className="px-12 py-8">Entidade / UF</th>
-                    <th className="px-10 py-8">Obrigação</th>
-                    <th className="px-10 py-8 text-center">Vencimento</th>
-                    <th className="px-10 py-8 text-center">Situação</th>
-                    <th className="px-12 py-8 text-right">Responsável</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-50">
-                  {filteredData.map((item) => (
-                    <tr key={item.id} className="hover:bg-slate-50/40 transition-all group">
-                      <td className="px-12 py-8">
+            return (
+                <div className="h-screen p-8 lg:p-12 flex flex-col gap-10">
+                    
+                    {/* Header */}
+                    <div className="flex justify-between items-end">
                         <div className="flex items-center gap-6">
-                          <div className="w-12 h-12 rounded-2xl bg-white border border-slate-100 flex items-center justify-center text-[#FF4DAD] font-black text-xs shadow-sm group-hover:border-[#FF4DAD]/30 transition-all">
-                            {item.uf || '--'}
-                          </div>
-                          <div>
-                            <p className="font-bold text-slate-900 text-lg leading-tight group-hover:text-[#FF4DAD] transition-colors">{item.empresa}</p>
-                            <span className="text-[9px] font-black uppercase text-slate-400 bg-slate-100 px-2 py-0.5 rounded mt-1 inline-block">{item.regime}</span>
-                          </div>
+                            <div className="w-16 h-16 bg-[#FF4DAD] rounded-3xl flex items-center justify-center shadow-2xl shadow-pink-200">
+                                <i data-lucide="database" className="text-white w-9 h-9"></i>
+                            </div>
+                            <div>
+                                <h1 className="text-5xl font-black tracking-tighter text-zinc-900 leading-none">
+                                    Gocase<span className="text-[#FF4DAD]">.</span>Tax
+                                </h1>
+                                <p className="text-zinc-400 font-bold tracking-[0.4em] text-[10px] uppercase mt-3">Compliance Intelligence Hub</p>
+                            </div>
                         </div>
-                      </td>
-                      <td className="px-10 py-8">
-                        <p className="font-bold text-slate-700 text-base">{item.obrigacao}</p>
-                        <p className="text-[10px] text-slate-400 font-bold uppercase mt-1">{item.tipo}</p>
-                      </td>
-                      <td className="px-10 py-8 text-center">
-                        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-slate-50 text-slate-900 font-black text-sm border border-slate-100">
-                          <Calendar size={14} className="text-slate-300" />
-                          {item.prazo}
+
+                        <div className="flex gap-10 bg-white p-7 rounded-[2.5rem] border border-zinc-100 shadow-sm items-center">
+                            <div className="text-right">
+                                <p className="text-[10px] font-black text-zinc-300 uppercase tracking-widest mb-1">Aba Ativa</p>
+                                <p className="text-4xl font-black text-zinc-900 leading-none">{activeTab.label}</p>
+                            </div>
+                            <div className="h-10 w-px bg-zinc-100"></div>
+                            <div className="text-right">
+                                <p className="text-[10px] font-black text-zinc-300 uppercase tracking-widest mb-1">Relógio Local</p>
+                                <p className="text-4xl font-black font-mono text-zinc-900 leading-none">
+                                    {time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                            </div>
                         </div>
-                      </td>
-                      <td className="px-10 py-8 text-center">
-                        <StatusBadge situacao={item.situacao} />
-                      </td>
-                      <td className="px-12 py-8 text-right">
-                        <p className="font-bold text-slate-600 text-base">{item.responsavel}</p>
-                        <p className="text-[10px] text-[#FF4DAD] font-black uppercase mt-1 flex items-center justify-end gap-1">
-                          {item.status || 'OK'} <ArrowRight size={10} />
-                        </p>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {filteredData.length === 0 && (
-                <div className="py-40 text-center flex flex-col items-center">
-                  <Filter className="text-slate-100 mb-4" size={60} />
-                  <p className="text-slate-400 font-black uppercase tracking-widest text-[10px]">Sem registos encontrados</p>
+                    </div>
+
+                    {/* KPIs Principais */}
+                    <div className="grid grid-cols-4 gap-8">
+                        <KpiCard label="Total Geral" value={stats.total} icon="file-text" color="text-zinc-800" />
+                        <KpiCard label="Em Atraso" value={stats.atrasados} icon="alert-circle" color="text-rose-500" />
+                        <KpiCard label="Concluídos" value={stats.concluidos} icon="check-circle" color="text-emerald-500" />
+                        <KpiCard label="Visão Atual" value={viewMode} icon="eye" color="text-blue-500" isStatus />
+                    </div>
+
+                    {/* Conteúdo Principal */}
+                    <div className="flex-1 premium-card flex flex-col overflow-hidden relative">
+                        <div className="sync-loader">
+                            <div className="sync-loader-fill" style={{ width: loading ? '100%' : '20%' }}></div>
+                            <div className="scanline"></div>
+                        </div>
+
+                        {/* Cabeçalho Tabela */}
+                        <div className="grid grid-cols-12 px-12 py-7 bg-zinc-50/50 border-b border-zinc-100 text-[11px] font-black text-zinc-400 uppercase tracking-[0.3em]">
+                            <div className="col-span-4">Empresa / UF</div>
+                            <div className="col-span-4">Obrigação / Tipo</div>
+                            <div className="col-span-2 text-center">Prazo Final</div>
+                            <div className="col-span-2 text-right">Situação</div>
+                        </div>
+
+                        {/* Lista de Dados */}
+                        <div className="flex-1 p-8 flex flex-col gap-5 overflow-hidden">
+                            {loading && data.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center gap-4 opacity-30">
+                                    <div className="w-12 h-12 border-4 border-zinc-100 border-t-[#FF4DAD] rounded-full animate-spin"></div>
+                                    <p className="font-black uppercase text-[10px] tracking-widest">Sincronizando com a Nuvem...</p>
+                                </div>
+                            ) : error ? (
+                                <div className="h-full flex flex-col items-center justify-center text-rose-500 font-bold">
+                                    <i data-lucide="wifi-off" className="w-16 h-16 mb-4"></i>
+                                    <p>{error}</p>
+                                </div>
+                            ) : displayItems.length === 0 ? (
+                                <div className="h-full flex flex-col items-center justify-center gap-4 opacity-20">
+                                    <i data-lucide="shield-check" className="w-20 h-20 text-emerald-500"></i>
+                                    <p className="font-black uppercase text-xl tracking-[0.2em]">Tudo em dia para: {viewMode}</p>
+                                </div>
+                            ) : (
+                                displayItems.map((item, idx) => (
+                                    <div key={item.id} className="grid grid-cols-12 gap-6 p-7 bg-zinc-50/40 rounded-[2rem] border border-zinc-100 items-center fade-slide-up" style={{ animationDelay: `${idx * 0.1}s` }}>
+                                        <div className="col-span-4 flex items-center gap-6">
+                                            <div className="w-14 h-14 rounded-2xl bg-white border border-zinc-100 flex items-center justify-center text-xs font-black text-[#FF4DAD] shadow-sm">
+                                                {item.uf}
+                                            </div>
+                                            <div className="truncate">
+                                                <p className="text-xl font-black text-zinc-900 truncate leading-tight uppercase">{item.empresa}</p>
+                                                <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mt-1 inline-block">{item.regime}</span>
+                                            </div>
+                                        </div>
+                                        <div className="col-span-4">
+                                            <p className="text-xl font-black text-zinc-700 leading-tight truncate uppercase">{item.obrigacao}</p>
+                                            <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">{item.tipo}</p>
+                                        </div>
+                                        <div className="col-span-2 text-center">
+                                            <div className="inline-block px-5 py-2 bg-white rounded-xl border border-zinc-100 font-black font-mono text-2xl text-zinc-800 shadow-sm">
+                                                {item.prazo}
+                                            </div>
+                                        </div>
+                                        <div className="col-span-2 flex justify-end">
+                                            <StatusBadge situacao={item.situacao} />
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Footer / Selector */}
+                    <div className="flex justify-between items-center px-4">
+                        <div className="flex bg-white p-2 rounded-[1.5rem] border border-zinc-100 shadow-sm gap-2">
+                            {CONFIG.COMPETENCIAS.map(c => (
+                                <button 
+                                    key={c.gid} 
+                                    onClick={() => setActiveTab(c)}
+                                    className={`px-8 py-3 text-[11px] font-black uppercase rounded-[1rem] transition-all ${activeTab.gid === c.gid ? 'bg-zinc-900 text-white shadow-xl' : 'text-zinc-400 hover:text-zinc-600'}`}
+                                >
+                                    {c.label}
+                                </button>
+                            ))}
+                        </div>
+                        <div className="flex items-center gap-6 text-zinc-300 font-black text-[10px] uppercase tracking-[0.3em]">
+                            <span className="flex items-center gap-2"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div> Google Cloud Sync Ativo</span>
+                            <span className="w-1.5 h-1.5 bg-zinc-100 rounded-full"></span>
+                            <span>v5.2-HTML-STABLE</span>
+                        </div>
+                    </div>
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      </main>
+            );
+        }
 
-      <footer className="max-w-7xl mx-auto mt-20 mb-16 flex justify-between items-center text-slate-400 text-[10px] font-black uppercase tracking-[0.3em] px-8 pt-10 border-t border-slate-100">
-        <p>© 2026 Gocase Hub</p>
-        <div className="flex items-center gap-6">
-          <span>Status: {error ? 'Desconectado' : 'Online'}</span>
-          <span className="text-slate-200">|</span>
-          <span className="text-[#FF4DAD]">v3.4.2</span>
-        </div>
-      </footer>
-    </div>
-  );
-};
+        // Sub-componentes
+        function KpiCard({ label, value, icon, color, isStatus }) {
+            return (
+                <div className="premium-card p-8 flex flex-col justify-between group hover:border-[#FF4DAD]/30 transition-all">
+                    <div className="flex justify-between items-center mb-4">
+                        <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{label}</p>
+                        <i data-lucide={icon} className="w-5 h-5 text-zinc-200 group-hover:text-[#FF4DAD] transition-colors"></i>
+                    </div>
+                    <p className={`text-4xl font-black tracking-tighter uppercase truncate ${color} ${isStatus ? 'text-2xl' : 'text-5xl'}`}>
+                        {value}
+                    </p>
+                </div>
+            );
+        }
 
-const StatCard = ({ label, value, icon, color, active, onClick }) => (
-  <button 
-    onClick={onClick}
-    className={`p-8 rounded-[2.5rem] border transition-all flex items-center justify-between group relative overflow-hidden ${
-      active 
-      ? 'bg-white border-[#FF4DAD] shadow-2xl shadow-pink-100 ring-1 ring-[#FF4DAD]' 
-      : 'bg-white border-slate-100 hover:border-slate-300'
-    }`}
-  >
-    <div className="relative z-10 text-left">
-      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">{label}</p>
-      <p className={`text-5xl font-black ${active ? 'text-slate-900' : 'text-slate-700'}`}>{value}</p>
-    </div>
-    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center transition-all ${color}`}>
-      {icon}
-    </div>
-    {active && <div className="absolute right-[-10%] bottom-[-20%] w-40 h-40 bg-pink-50/60 rounded-full blur-3xl"></div>}
-  </button>
-);
+        function StatusBadge({ situacao }) {
+            const s = (situacao || "").toUpperCase();
+            let color = "bg-blue-50 text-blue-600 border-blue-100";
+            let icon = "clock";
 
-const StatusBadge = ({ situacao = '' }) => {
-  const s = (situacao || '').toUpperCase();
-  let style = "bg-slate-100 text-slate-500";
-  let icon = <Clock size={16} />;
+            if (s.includes("CONCLU") || s.includes("OK") || s.includes("PAGO")) {
+                color = "bg-emerald-50 text-emerald-600 border-emerald-100 shadow-sm shadow-emerald-50";
+                icon = "check-circle";
+            } else if (s.includes("ATRAS")) {
+                color = "bg-rose-50 text-rose-600 border-rose-100 shadow-sm shadow-rose-50";
+                icon = "alert-circle";
+            }
 
-  if (s.includes('CONCLU')) {
-    style = "bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100/50";
-    icon = <CheckCircle2 size={16} />;
-  } else if (s.includes('ATRAS')) {
-    style = "bg-rose-50 text-rose-600 ring-1 ring-rose-100/50";
-    icon = <AlertCircle size={16} />;
-  } else if (s.includes('PRAZO') || s.includes('PENDENTE')) {
-    style = "bg-blue-50 text-blue-600 ring-1 ring-blue-100/50";
-    icon = <Clock size={16} />;
-  }
+            return (
+                <div className={`px-6 py-3 rounded-2xl flex items-center gap-3 border font-black text-[11px] uppercase tracking-widest ${color}`}>
+                    <i data-lucide={icon} className="w-4 h-4"></i>
+                    {situacao}
+                </div>
+            );
+        }
 
-  return (
-    <span className={`inline-flex items-center gap-3 px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest ${style}`}>
-      {icon}
-      {situacao}
-    </span>
-  );
-};
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
 
-export default App;
+        // Refresh dos Ícones Lucide
+        const refreshIcons = () => { if (window.lucide) window.lucide.createIcons(); };
+        setTimeout(refreshIcons, 500);
+        setInterval(refreshIcons, 5000);
+    </script>
+</body>
+</html>
