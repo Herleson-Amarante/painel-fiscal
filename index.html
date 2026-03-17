@@ -17,7 +17,7 @@
         .font-mono { font-family: 'JetBrains Mono', monospace; }
         .premium-card { background: #FFFFFF; border: 1px solid #F1F3F5; border-radius: 2.5rem; box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.03); }
         .sync-loader { height: 4px; background: #F1F3F5; position: relative; overflow: hidden; }
-        .sync-loader-fill { height: 100%; background: var(--brand-pink); transition: width 0.5s ease; }
+        .sync-loader-fill { height: 100%; background: var(--brand-pink); transition: width 0.5s linear; }
         .fade-slide-up { animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
         .status-badge { padding: 6px 16px; border-radius: 14px; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -38,15 +38,17 @@
                 { label: "Fev-2026", gid: "802166840" }
             ],
             ITEMS_PER_PAGE: 5,
-            ROTATION_INTERVAL: 15000 // 15 segundos conforme solicitado
+            ROTATION_INTERVAL: 10000 // Alterado para 10 segundos
         };
+
+        const VIEW_MODES = ['CONCLUÍDO', 'NO PRAZO', 'ATRASADO'];
 
         function App() {
             const [data, setData] = useState([]);
             const [activeTab, setActiveTab] = useState(CONFIG.COMPETENCIAS[0]);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
-            const [viewMode, setViewMode] = useState('ATRASADO'); // Começa pelas urgências
+            const [viewMode, setViewMode] = useState('CONCLUÍDO'); 
             const [currentPage, setCurrentPage] = useState(0);
             const [time, setTime] = useState(new Date());
 
@@ -76,9 +78,6 @@
                     const response = await fetch(targetUrl);
                     if (!response.ok) throw new Error(`Conexão falhou (${response.status})`);
                     const text = await response.text();
-                    if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
-                        throw new Error("A planilha requer login ou não está publicada corretamente.");
-                    }
                     const rows = parseCSV(text);
                     if (rows.length <= 1) {
                         setData([]);
@@ -135,21 +134,21 @@
 
             const totalPages = Math.ceil(filteredItems.length / CONFIG.ITEMS_PER_PAGE) || 1;
 
-            // Lógica de Paginação e Rotação Automática de Filtros
+            // Lógica de Rotação Automática (10 Segundos)
             useEffect(() => {
                 if (loading || error) return;
                 
                 const interval = setInterval(() => {
                     setCurrentPage(prev => {
-                        // Se houver mais páginas no filtro atual, vai para a próxima
+                        // Se houver próxima página no modo atual
                         if (prev < totalPages - 1) {
                             return prev + 1;
                         } else {
-                            // Se era a última página, alterna o filtro e volta para a página zero
-                            setViewMode(currentFilter => {
-                                if (currentFilter === 'ATRASADO') return 'NO PRAZO';
-                                if (currentFilter === 'NO PRAZO') return 'CONCLUÍDO';
-                                return 'ATRASADO';
+                            // Se chegou ao fim das páginas do modo atual, muda para o próximo status
+                            setViewMode(current => {
+                                const currentIndex = VIEW_MODES.indexOf(current);
+                                const nextIndex = (currentIndex + 1) % VIEW_MODES.length;
+                                return VIEW_MODES[nextIndex];
                             });
                             return 0;
                         }
@@ -197,7 +196,7 @@
                         </div>
                     </div>
 
-                    {/* KPIs */}
+                    {/* KPIs na nova ordem solicitada */}
                     <div className="grid grid-cols-4 gap-6">
                         <KpiCard 
                             label="Total Obrigações" 
@@ -207,9 +206,9 @@
                             labelColor="text-zinc-800"
                             active={true} 
                         />
-                        <KpiCard label="Atrasadas" value={metrics.atrasadas} icon="flame" color="text-rose-500" active={viewMode === 'ATRASADO'} />
-                        <KpiCard label="No Prazo" value={metrics.noPrazo} icon="clock" color="text-blue-500" active={viewMode === 'NO PRAZO'} />
                         <KpiCard label="Concluídas" value={metrics.concluidas} icon="check-circle" color="text-emerald-500" active={viewMode === 'CONCLUÍDO'} />
+                        <KpiCard label="No Prazo" value={metrics.noPrazo} icon="clock" color="text-blue-500" active={viewMode === 'NO PRAZO'} />
+                        <KpiCard label="Atrasadas" value={metrics.atrasadas} icon="flame" color="text-rose-500" active={viewMode === 'ATRASADO'} />
                     </div>
 
                     {/* Monitor Table */}
@@ -222,10 +221,10 @@
                             <div className="flex items-center gap-4">
                                 <span className={`flex h-2 w-2 rounded-full ${error ? 'bg-rose-500' : 'bg-[#FF4DAD] animate-pulse'}`}></span>
                                 <p className="text-[10px] font-black uppercase tracking-[0.3em]">
-                                    {error ? `ERRO NA CONEXÃO` : loading ? 'CARREGANDO DADOS...' : `CATEGORIA: ${viewMode} • PÁG ${currentPage + 1}/${totalPages}`}
+                                    {error ? `ERRO NA CONEXÃO` : loading ? 'CARREGANDO DADOS...' : `STATUS: ${viewMode} • PÁGINA ${currentPage + 1}/${totalPages}`}
                                 </p>
                             </div>
-                            <div className="text-[9px] font-black uppercase text-zinc-500 tracking-widest">Rotação Automática: 15s</div>
+                            <div className="text-[9px] font-black uppercase text-zinc-500 tracking-widest">Rotação Automática: 10s</div>
                         </div>
 
                         <div className="flex-1 p-8 overflow-hidden">
@@ -261,18 +260,17 @@
                             ) : (
                                 <div className="h-full flex flex-col items-center justify-center text-zinc-200 gap-4">
                                     <i data-lucide="inbox" className="w-16 h-16"></i>
-                                    <p className="font-black uppercase text-xs tracking-[0.3em]">Sem dados nesta categoria</p>
-                                    <p className="text-[10px] text-zinc-400 font-bold">Aguardando rotação automática...</p>
+                                    <p className="font-black uppercase text-xs tracking-[0.3em]">Sem registros em {viewMode}</p>
+                                    <p className="text-[10px] text-zinc-400 font-bold uppercase">Alternando automaticamente...</p>
                                 </div>
                             )}
                         </div>
                     </div>
 
-                    {/* Footer Info */}
                     <div className="flex justify-end items-center">
                         <div className="text-[10px] font-black text-zinc-300 uppercase tracking-[0.4em] flex items-center gap-3">
                             <span className="h-3 w-3 bg-emerald-500 rounded-full animate-pulse"></span>
-                            Monitor Gocase Tax Ativo
+                            Monitor Gocase Tax v2.6
                         </div>
                     </div>
                 </div>
@@ -281,7 +279,7 @@
 
         function KpiCard({ label, value, icon, color, active, bg, labelColor }) {
             return (
-                <div className={`premium-card p-8 flex flex-col gap-2 transition-all duration-500 ${bg || 'bg-white'} ${active ? 'ring-4 ring-[#FF4DAD]/20 scale-105 shadow-2xl shadow-pink-100' : 'opacity-30'}`}>
+                <div className={`premium-card p-8 flex flex-col gap-2 transition-all duration-500 ${bg || 'bg-white'} ${active ? 'ring-4 ring-[#FF4DAD]/20 scale-105 shadow-2xl shadow-pink-100' : 'opacity-25'}`}>
                     <div className="flex justify-between items-center mb-1">
                         <p className={`text-[10px] font-black uppercase tracking-widest ${labelColor || 'text-zinc-400'}`}>{label}</p>
                         <i data-lucide={icon} className={`w-5 h-5 ${active ? 'text-[#FF4DAD]' : 'text-zinc-300'}`}></i>
