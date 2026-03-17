@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Gocase Tax | Intelligence Dashboard</title>
-    <!-- Scripts Necessários -->
+    <title>Gocase Tax | Efficiency Monitor</title>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -13,58 +12,17 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     
     <style>
-        :root { 
-            --brand-pink: #FF4DAD; 
-            --bg-main: #FDFDFF;
-        }
-        body { 
-            background-color: var(--bg-main); 
-            font-family: 'Inter', sans-serif; 
-            overflow: hidden; /* Ideal para modo TV/Dashboard */
-        }
+        :root { --brand-pink: #FF4DAD; --bg-main: #FDFDFF; }
+        body { background-color: var(--bg-main); font-family: 'Inter', sans-serif; overflow: hidden; }
         .font-mono { font-family: 'JetBrains Mono', monospace; }
-        
-        /* Efeito de Vidro e Sombras Premium */
-        .premium-card { 
-            background: #FFFFFF; 
-            border: 1px solid #F1F3F5;
-            border-radius: 2.5rem;
-            box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.03);
-        }
-
-        /* Barra de Progresso de Sincronização */
-        .sync-loader {
-            height: 4px;
-            background: #F1F3F5;
-            position: relative;
-            overflow: hidden;
-        }
-        .sync-loader-fill {
-            height: 100%;
-            background: var(--brand-pink);
-            transition: width 0.5s ease;
-        }
-
-        /* Animações de Transição de Dados */
-        .fade-slide-up {
-            animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-        @keyframes fadeSlideUp {
-            from { opacity: 0; transform: translateY(15px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* Scanline para efeito de "Live Data" */
-        .scanline {
-            position: absolute;
-            top: 0; left: 0; right: 0; height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255, 77, 173, 0.05), transparent);
-            animation: scan 3s linear infinite;
-        }
-        @keyframes scan {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(100%); }
-        }
+        .premium-card { background: #FFFFFF; border: 1px solid #F1F3F5; border-radius: 2.5rem; box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.03); }
+        .sync-loader { height: 4px; background: #F1F3F5; position: relative; overflow: hidden; }
+        .sync-loader-fill { height: 100%; background: var(--brand-pink); transition: width 0.5s ease; }
+        .fade-slide-up { animation: fadeSlideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes fadeSlideUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+        .status-badge { padding: 4px 12px; border-radius: 12px; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; }
+        .pulse-pink { animation: pulsePink 2s infinite; }
+        @keyframes pulsePink { 0% { box-shadow: 0 0 0 0 rgba(255, 77, 173, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(255, 77, 173, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 77, 173, 0); } }
     </style>
 </head>
 <body>
@@ -73,19 +31,15 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo, useCallback } = React;
 
-        // Configurações da Planilha
         const CONFIG = {
-            BASE_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub?output=csv",
+            // URL base limpa para evitar erro 400 na concatenação de parâmetros
+            BASE_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vRykG4Z4pN-ICEym8uYRPnvOJ18clvmM8eP5t2l10RBfrPGmad3TagyAF8qczDGBw/pub",
             COMPETENCIAS: [
-                { label: "Geral", gid: "802166840" },
-                { label: "Jan-2026", gid: "0" },
-                { label: "Fev-2026", gid: "1165184281" }
+                { label: "Jan-2026", gid: "1069538796" }, 
+                { label: "Fev-2026", gid: "802166840" }
             ],
-            PROXIES: [
-                (url) => url, // Direto
-                (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-                (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`
-            ]
+            ITEMS_PER_PAGE: 5,
+            ROTATION_INTERVAL: 8000 
         };
 
         function App() {
@@ -93,283 +47,260 @@
             const [activeTab, setActiveTab] = useState(CONFIG.COMPETENCIAS[0]);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
-            const [viewMode, setViewMode] = useState('ATRASADO'); // Ciclo: ATRASADO -> PRAZO -> CONCLUIDO
+            const [viewMode, setViewMode] = useState('CONCLUÍDO'); 
+            const [currentPage, setCurrentPage] = useState(0);
             const [time, setTime] = useState(new Date());
 
-            // Parser de CSV Robusto
             const parseCSV = (text) => {
-                const lines = text.split(/\r?\n/).filter(l => l.trim() !== "");
+                const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
+                if (lines.length <= 1) return [];
+
+                const separator = lines[0].includes(';') ? ';' : ',';
+                
                 return lines.map(line => {
                     const row = [];
-                    let curr = "";
-                    let inQuotes = false;
+                    let curr = "", inQuotes = false;
                     for (let i = 0; i < line.length; i++) {
-                        const char = line[i];
+                        let char = line[i];
                         if (char === '"') inQuotes = !inQuotes;
-                        else if ((char === ',' || char === ';') && !inQuotes) {
-                            row.push(curr.trim());
-                            curr = "";
-                        } else {
-                            curr += char;
-                        }
+                        else if (char === separator && !inQuotes) { row.push(curr.trim()); curr = ""; }
+                        else curr += char;
                     }
                     row.push(curr.trim());
                     return row;
                 });
             };
 
-            // Função de Fetch com Fallback de Proxy (Anti-CORS)
-            const fetchData = useCallback(async () => {
+            const fetchData = useCallback(async (retryCount = 0) => {
                 setLoading(true);
-                const url = `${CONFIG.BASE_URL}&gid=${activeTab.gid}&t=${Date.now()}`;
-                
-                let success = false;
-                for (const proxy of CONFIG.PROXIES) {
-                    try {
-                        const response = await fetch(proxy(url));
-                        if (response.ok) {
-                            const text = await response.text();
-                            if (text.includes('<!DOCTYPE html>')) continue;
-
-                            const rows = parseCSV(text);
-                            // Identifica o cabeçalho para começar o mapeamento
-                            const headerIdx = rows.findIndex(r => r[0] && r[0].toLowerCase().includes('empresa'));
-                            const startIdx = headerIdx === -1 ? 1 : headerIdx + 1;
-
-                            const formatted = rows.slice(startIdx)
-                                .filter(r => r[0] && r[0].length > 1)
-                                .map((r, i) => ({
-                                    id: `${activeTab.gid}-${i}`,
-                                    empresa: r[0],
-                                    uf: r[1] || "--",
-                                    regime: r[2] || "",
-                                    tipo: r[3] || "",
-                                    obrigacao: r[4] || "",
-                                    prazo: r[5] || "",
-                                    situacao: (r[6] || "PENDENTE").toUpperCase(),
-                                    responsavel: r[7] || "",
-                                    status: r[8] || ""
-                                }));
-
-                            setData(formatted);
-                            setError(null);
-                            success = true;
-                            break;
-                        }
-                    } catch (e) {
-                        console.warn("Falha no carregamento via proxy");
+                setError(null);
+                try {
+                    // Construção exata da URL combinando o link com parâmetros de aba (gid)
+                    const targetUrl = `${CONFIG.BASE_URL}?output=csv&single=true&gid=${activeTab.gid}&t=${Date.now()}`;
+                    
+                    const response = await fetch(targetUrl);
+                    if (!response.ok) throw new Error(`Conexão falhou (${response.status})`);
+                    
+                    const text = await response.text();
+                    
+                    // Verifica se o retorno não é uma página HTML de erro/login corporativo
+                    if (text.includes('<!DOCTYPE html>') || text.includes('<html')) {
+                        throw new Error("A planilha não está acessível publicamente ou requer login corporativo.");
                     }
-                }
 
-                if (!success) setError("Erro ao conectar à folha de cálculo. Verifique a rede.");
-                setLoading(false);
+                    const rows = parseCSV(text);
+                    if (rows.length <= 1) {
+                        setData([]);
+                        return;
+                    }
+
+                    // A primeira linha (índice 0) é o cabeçalho, os dados começam na linha 1
+                    const dataRows = rows.slice(1);
+
+                    // Mapeamento das colunas A até I com limpeza de aspas residuais
+                    const formatted = dataRows.map((r, i) => ({
+                        id: `row-${i}-${activeTab.gid}`,
+                        empresa: r[0] ? r[0].replace(/^"|"$/g, '').trim() : "",         // Coluna A
+                        uf: r[1] ? r[1].replace(/^"|"$/g, '').trim() : "--",            // Coluna B
+                        regime: r[2] ? r[2].replace(/^"|"$/g, '').trim() : "--",        // Coluna C
+                        tipo: r[3] ? r[3].replace(/^"|"$/g, '').trim() : "--",          // Coluna D
+                        obrigacao: r[4] ? r[4].replace(/^"|"$/g, '').trim() : "--",     // Coluna E
+                        prazo: r[5] ? r[5].replace(/^"|"$/g, '').trim() : "--/--",      // Coluna F
+                        situacao: (r[6] || "PENDENTE").replace(/^"|"$/g, '').trim().toUpperCase(), // Coluna G
+                        responsavel: r[7] ? r[7].replace(/^"|"$/g, '').trim() : "N/A",  // Coluna H
+                        status: r[8] ? r[8].replace(/^"|"$/g, '').trim() : ""           // Coluna I
+                    })).filter(item => item.empresa !== "" && item.empresa.toUpperCase() !== "EMPRESA");
+
+                    setData(formatted);
+                } catch (e) { 
+                    console.error("Erro Dashboard:", e);
+                    if (retryCount < 2) {
+                        setTimeout(() => fetchData(retryCount + 1), 2000);
+                        return;
+                    }
+                    setError(e.message.includes("login") ? e.message : "Erro ao sincronizar. Verifique se o link de 'Publicar na Web' está correto.");
+                } finally {
+                    setLoading(false);
+                }
             }, [activeTab]);
 
-            // Efeitos de Tempo e Sincronização
             useEffect(() => {
                 fetchData();
-                const timer = setInterval(() => setTime(new Date()), 1000);
-                const sync = setInterval(fetchData, 60000); // Sync a cada minuto
-                return () => { clearInterval(timer); clearInterval(sync); };
+                const clock = setInterval(() => setTime(new Date()), 1000);
+                return () => clearInterval(clock);
             }, [fetchData]);
 
-            // Efeito de Rotação Automática da Visualização (Modo Dashboard)
-            useEffect(() => {
-                const modes = ['ATRASADO', 'PRAZO', 'CONCLUÍDO'];
-                const interval = setInterval(() => {
-                    setViewMode(current => {
-                        const idx = modes.indexOf(current === 'NO PRAZO' ? 'PRAZO' : current);
-                        const next = modes[(idx + 1) % 3];
-                        return next === 'PRAZO' ? 'NO PRAZO' : next;
-                    });
-                }, 10000); // Troca a cada 10 segundos
-                return () => clearInterval(interval);
-            }, []);
+            const metrics = useMemo(() => {
+                const total = data.length;
+                const concluidas = data.filter(i => ["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(s => i.situacao.includes(s))).length;
+                const noPrazo = data.filter(i => ["PRAZO", "PENDENTE", "ANDAMENTO", "ABERTO", "NO PRAZO"].some(s => i.situacao.includes(s))).length;
+                const atrasadas = data.filter(i => i.situacao.includes("ATRAS")).length;
+                const eficiencia = total > 0 ? Math.round(((concluidas + noPrazo) / total) * 100) : 0;
+                return { total, concluidas, noPrazo, atrasadas, eficiencia };
+            }, [data]);
 
-            // Filtros de Dados
-            const displayItems = useMemo(() => {
+            const filteredItems = useMemo(() => {
                 return data.filter(item => {
                     const s = item.situacao;
-                    if (viewMode === 'CONCLUÍDO') return s.includes('CONCLU') || s.includes('OK') || s.includes('PAGO');
-                    if (viewMode === 'NO PRAZO') return s.includes('PRAZO') || s.includes('PENDENTE') || s.includes('ANDAMENTO');
-                    return s.includes('ATRAS');
-                }).slice(0, 6); // Limite de 6 itens para não quebrar o layout da TV
+                    if (viewMode === 'CONCLUÍDO') return ["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(st => s.includes(st));
+                    if (viewMode === 'NO PRAZO') return ["PRAZO", "PENDENTE", "ANDAMENTO", "ABERTO", "NO PRAZO"].some(st => s.includes(st));
+                    return s.includes("ATRAS");
+                });
             }, [data, viewMode]);
 
-            const stats = useMemo(() => ({
-                total: data.length,
-                atrasados: data.filter(i => i.situacao.includes('ATRAS')).length,
-                concluidos: data.filter(i => i.situacao.includes('CONCLU') || i.situacao.includes('OK')).length
-            }), [data]);
+            const totalPages = Math.ceil(filteredItems.length / CONFIG.ITEMS_PER_PAGE) || 1;
+
+            useEffect(() => {
+                if (loading || error || filteredItems.length === 0) return;
+                const interval = setInterval(() => {
+                    setCurrentPage(prev => {
+                        if (prev < totalPages - 1) return prev + 1;
+                        setViewMode(curr => {
+                            if (curr === 'ATRASADO') return 'NO PRAZO';
+                            if (curr === 'NO PRAZO') return 'CONCLUÍDO';
+                            return 'ATRASADO';
+                        });
+                        return 0;
+                    });
+                }, CONFIG.ROTATION_INTERVAL);
+                return () => clearInterval(interval);
+            }, [totalPages, loading, error, viewMode, filteredItems.length]);
 
             return (
-                <div className="h-screen p-8 lg:p-12 flex flex-col gap-10">
-                    
+                <div className="h-screen p-10 flex flex-col gap-8">
                     {/* Header */}
                     <div className="flex justify-between items-end">
                         <div className="flex items-center gap-6">
-                            <div className="w-16 h-16 bg-[#FF4DAD] rounded-3xl flex items-center justify-center shadow-2xl shadow-pink-200">
-                                <i data-lucide="database" className="text-white w-9 h-9"></i>
+                            <div className="w-16 h-16 bg-[#FF4DAD] rounded-[2rem] flex items-center justify-center shadow-xl shadow-pink-100 pulse-pink">
+                                <i data-lucide="bar-chart-3" className="text-white w-8 h-8"></i>
                             </div>
                             <div>
-                                <h1 className="text-5xl font-black tracking-tighter text-zinc-900 leading-none">
-                                    Gocase<span className="text-[#FF4DAD]">.</span>Tax
-                                </h1>
-                                <p className="text-zinc-400 font-bold tracking-[0.4em] text-[10px] uppercase mt-3">Compliance Intelligence Hub</p>
+                                <h1 className="text-5xl font-black text-zinc-900 tracking-tighter leading-none">Gocase<span className="text-[#FF4DAD]">.</span>Tax</h1>
+                                <p className="text-zinc-400 font-bold uppercase tracking-[0.4em] text-[9px] mt-3">Monitoramento Fiscal</p>
                             </div>
                         </div>
 
-                        <div className="flex gap-10 bg-white p-7 rounded-[2.5rem] border border-zinc-100 shadow-sm items-center">
+                        <div className="bg-white p-6 rounded-[2.5rem] border border-zinc-100 shadow-sm flex items-center gap-10">
                             <div className="text-right">
-                                <p className="text-[10px] font-black text-zinc-300 uppercase tracking-widest mb-1">Aba Ativa</p>
-                                <p className="text-4xl font-black text-zinc-900 leading-none">{activeTab.label}</p>
-                            </div>
-                            <div className="h-10 w-px bg-zinc-100"></div>
-                            <div className="text-right">
-                                <p className="text-[10px] font-black text-zinc-300 uppercase tracking-widest mb-1">Relógio Local</p>
-                                <p className="text-4xl font-black font-mono text-zinc-900 leading-none">
-                                    {time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                <p className="text-[10px] font-black text-zinc-300 uppercase tracking-widest mb-1">Eficiência Geral</p>
+                                <p className={`text-4xl font-black leading-none ${metrics.eficiencia > 90 ? 'text-emerald-500' : 'text-amber-500'}`}>
+                                    {metrics.eficiencia}%
                                 </p>
                             </div>
+                            <div className="w-px h-10 bg-zinc-100"></div>
+                            <div className="text-right font-mono text-4xl font-black text-zinc-800 leading-none">
+                                {time.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            </div>
                         </div>
                     </div>
 
-                    {/* KPIs Principais */}
-                    <div className="grid grid-cols-4 gap-8">
-                        <KpiCard label="Total Geral" value={stats.total} icon="file-text" color="text-zinc-800" />
-                        <KpiCard label="Em Atraso" value={stats.atrasados} icon="alert-circle" color="text-rose-500" />
-                        <KpiCard label="Concluídos" value={stats.concluidos} icon="check-circle" color="text-emerald-500" />
-                        <KpiCard label="Visão Atual" value={viewMode} icon="eye" color="text-blue-500" isStatus />
+                    {/* KPIs */}
+                    <div className="grid grid-cols-4 gap-6">
+                        <KpiCard label="Total Obrigações" value={metrics.total} icon="file-text" color="text-zinc-800" />
+                        <KpiCard label="Críticas / Atrasadas" value={metrics.atrasadas} icon="flame" color="text-rose-500" active={viewMode === 'ATRASADO'} />
+                        <KpiCard label="No Prazo" value={metrics.noPrazo} icon="clock" color="text-blue-500" active={viewMode === 'NO PRAZO'} />
+                        <KpiCard label="Concluídas" value={metrics.concluidas} icon="check-circle" color="text-emerald-500" active={viewMode === 'CONCLUÍDO'} />
                     </div>
 
-                    {/* Conteúdo Principal */}
+                    {/* Monitor Table */}
                     <div className="flex-1 premium-card flex flex-col overflow-hidden relative">
                         <div className="sync-loader">
-                            <div className="sync-loader-fill" style={{ width: loading ? '100%' : '20%' }}></div>
-                            <div className="scanline"></div>
+                            <div className="sync-loader-fill" style={{ width: loading ? '100%' : '0%' }}></div>
                         </div>
 
-                        {/* Cabeçalho Tabela */}
-                        <div className="grid grid-cols-12 px-12 py-7 bg-zinc-50/50 border-b border-zinc-100 text-[11px] font-black text-zinc-400 uppercase tracking-[0.3em]">
-                            <div className="col-span-4">Empresa / UF</div>
-                            <div className="col-span-4">Obrigação / Tipo</div>
-                            <div className="col-span-2 text-center">Prazo Final</div>
-                            <div className="col-span-2 text-right">Situação</div>
+                        <div className="bg-zinc-900 px-12 py-4 flex justify-between items-center text-white">
+                            <div className="flex items-center gap-4">
+                                <span className={`flex h-2 w-2 rounded-full ${error ? 'bg-rose-500' : 'bg-[#FF4DAD] animate-pulse'}`}></span>
+                                <p className="text-[10px] font-black uppercase tracking-[0.3em]">
+                                    {error ? `ERRO DE SINCRONIZAÇÃO` : loading ? 'SINCRONIZANDO PLANILHA...' : `FILTRO ATIVO: ${viewMode} • ${currentPage + 1}/${totalPages}`}
+                                </p>
+                            </div>
+                            <div className="text-[9px] font-black uppercase text-zinc-500">Gocase Digital Systems © 2026</div>
                         </div>
 
-                        {/* Lista de Dados */}
-                        <div className="flex-1 p-8 flex flex-col gap-5 overflow-hidden">
-                            {loading && data.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center gap-4 opacity-30">
-                                    <div className="w-12 h-12 border-4 border-zinc-100 border-t-[#FF4DAD] rounded-full animate-spin"></div>
-                                    <p className="font-black uppercase text-[10px] tracking-widest">Sincronizando com a Nuvem...</p>
+                        <div className="flex-1 p-8 overflow-hidden">
+                            {error ? (
+                                <div className="h-full flex flex-col items-center justify-center text-rose-500 gap-6 text-center">
+                                    <i data-lucide="alert-triangle" className="w-16 h-16"></i>
+                                    <div>
+                                        <p className="font-black uppercase text-sm tracking-widest mb-2">{error}</p>
+                                        <p className="text-[10px] text-rose-400 font-bold max-w-md mx-auto uppercase">Certifique-se que o arquivo está publicado (Arquivo > Compartilhar > Publicar na Web > Valores separados por vírgula .csv)</p>
+                                    </div>
+                                    <button onClick={() => fetchData()} className="px-8 py-3 bg-zinc-900 text-white rounded-2xl text-[10px] font-black uppercase hover:bg-zinc-800 transition-colors">Tentar Reconectar</button>
                                 </div>
-                            ) : error ? (
-                                <div className="h-full flex flex-col items-center justify-center text-rose-500 font-bold">
-                                    <i data-lucide="wifi-off" className="w-16 h-16 mb-4"></i>
-                                    <p>{error}</p>
-                                </div>
-                            ) : displayItems.length === 0 ? (
-                                <div className="h-full flex flex-col items-center justify-center gap-4 opacity-20">
-                                    <i data-lucide="shield-check" className="w-20 h-20 text-emerald-500"></i>
-                                    <p className="font-black uppercase text-xl tracking-[0.2em]">Tudo em dia para: {viewMode}</p>
+                            ) : filteredItems.length > 0 ? (
+                                <div className="flex flex-col gap-4">
+                                    {filteredItems.slice(currentPage * CONFIG.ITEMS_PER_PAGE, (currentPage + 1) * CONFIG.ITEMS_PER_PAGE).map((item, idx) => (
+                                        <div key={item.id} className="grid grid-cols-12 px-8 py-5 bg-white rounded-3xl border border-zinc-100 items-center shadow-sm fade-slide-up" style={{ animationDelay: `${idx * 0.1}s` }}>
+                                            <div className="col-span-3">
+                                                <p className="font-black text-zinc-900 uppercase truncate text-sm leading-none">{item.empresa}</p>
+                                                <span className="text-[8px] font-bold text-zinc-400 uppercase tracking-widest mt-1 inline-block">{item.uf} • {item.regime}</span>
+                                            </div>
+                                            <div className="col-span-4 text-zinc-600 font-bold uppercase text-[10px] px-4 truncate">{item.obrigacao}</div>
+                                            <div className="col-span-2 text-center">
+                                                <span className="font-mono font-bold text-zinc-800 bg-zinc-50 px-4 py-1.5 rounded-lg border border-zinc-100 text-sm">{item.prazo}</span>
+                                            </div>
+                                            <div className="col-span-3 text-right">
+                                                <p className="text-[9px] font-black text-zinc-400 uppercase mb-1">{item.responsavel}</p>
+                                                <StatusLabel text={item.situacao} />
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             ) : (
-                                displayItems.map((item, idx) => (
-                                    <div key={item.id} className="grid grid-cols-12 gap-6 p-7 bg-zinc-50/40 rounded-[2rem] border border-zinc-100 items-center fade-slide-up" style={{ animationDelay: `${idx * 0.1}s` }}>
-                                        <div className="col-span-4 flex items-center gap-6">
-                                            <div className="w-14 h-14 rounded-2xl bg-white border border-zinc-100 flex items-center justify-center text-xs font-black text-[#FF4DAD] shadow-sm">
-                                                {item.uf}
-                                            </div>
-                                            <div className="truncate">
-                                                <p className="text-xl font-black text-zinc-900 truncate leading-tight uppercase">{item.empresa}</p>
-                                                <span className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mt-1 inline-block">{item.regime}</span>
-                                            </div>
-                                        </div>
-                                        <div className="col-span-4">
-                                            <p className="text-xl font-black text-zinc-700 leading-tight truncate uppercase">{item.obrigacao}</p>
-                                            <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-wider">{item.tipo}</p>
-                                        </div>
-                                        <div className="col-span-2 text-center">
-                                            <div className="inline-block px-5 py-2 bg-white rounded-xl border border-zinc-100 font-black font-mono text-2xl text-zinc-800 shadow-sm">
-                                                {item.prazo}
-                                            </div>
-                                        </div>
-                                        <div className="col-span-2 flex justify-end">
-                                            <StatusBadge situacao={item.situacao} />
-                                        </div>
-                                    </div>
-                                ))
+                                <div className="h-full flex flex-col items-center justify-center text-zinc-200 gap-4">
+                                    <i data-lucide="inbox" className="w-16 h-16"></i>
+                                    <p className="font-black uppercase text-xs tracking-[0.3em]">Nenhum registro para exibir neste filtro</p>
+                                </div>
                             )}
                         </div>
                     </div>
 
-                    {/* Footer / Selector */}
-                    <div className="flex justify-between items-center px-4">
-                        <div className="flex bg-white p-2 rounded-[1.5rem] border border-zinc-100 shadow-sm gap-2">
+                    {/* Competência Selector */}
+                    <div className="flex justify-between items-center">
+                        <div className="flex gap-2 bg-white p-2 rounded-3xl shadow-sm border border-zinc-100">
                             {CONFIG.COMPETENCIAS.map(c => (
-                                <button 
-                                    key={c.gid} 
-                                    onClick={() => setActiveTab(c)}
-                                    className={`px-8 py-3 text-[11px] font-black uppercase rounded-[1rem] transition-all ${activeTab.gid === c.gid ? 'bg-zinc-900 text-white shadow-xl' : 'text-zinc-400 hover:text-zinc-600'}`}
-                                >
+                                <button key={c.gid} onClick={() => { setActiveTab(c); setCurrentPage(0); }} 
+                                    className={`px-10 py-3 rounded-2xl text-[10px] font-black uppercase transition-all ${activeTab.gid === c.gid ? 'bg-zinc-900 text-white shadow-xl' : 'text-zinc-400 hover:bg-zinc-50'}`}>
                                     {c.label}
                                 </button>
                             ))}
                         </div>
-                        <div className="flex items-center gap-6 text-zinc-300 font-black text-[10px] uppercase tracking-[0.3em]">
-                            <span className="flex items-center gap-2"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div> Google Cloud Sync Ativo</span>
-                            <span className="w-1.5 h-1.5 bg-zinc-100 rounded-full"></span>
-                            <span>v5.2-HTML-STABLE</span>
+                        <div className="text-[9px] font-black text-zinc-300 uppercase tracking-[0.4em] flex items-center gap-3">
+                            <span className="h-2 w-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                            Auto-Refresh Ativo
                         </div>
                     </div>
                 </div>
             );
         }
 
-        // Sub-componentes
-        function KpiCard({ label, value, icon, color, isStatus }) {
+        function KpiCard({ label, value, icon, color, active }) {
             return (
-                <div className="premium-card p-8 flex flex-col justify-between group hover:border-[#FF4DAD]/30 transition-all">
-                    <div className="flex justify-between items-center mb-4">
-                        <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{label}</p>
-                        <i data-lucide={icon} className="w-5 h-5 text-zinc-200 group-hover:text-[#FF4DAD] transition-colors"></i>
+                <div className={`premium-card p-7 flex flex-col gap-2 transition-all duration-500 ${active ? 'ring-2 ring-[#FF4DAD] scale-105 shadow-xl shadow-pink-50' : 'opacity-40 hover:opacity-60'}`}>
+                    <div className="flex justify-between items-center mb-1">
+                        <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest">{label}</p>
+                        <i data-lucide={icon} className={`w-4 h-4 ${active ? 'text-[#FF4DAD]' : 'text-zinc-300'}`}></i>
                     </div>
-                    <p className={`text-4xl font-black tracking-tighter uppercase truncate ${color} ${isStatus ? 'text-2xl' : 'text-5xl'}`}>
-                        {value}
-                    </p>
+                    <p className={`text-4xl font-black tracking-tighter ${color}`}>{value}</p>
                 </div>
             );
         }
 
-        function StatusBadge({ situacao }) {
-            const s = (situacao || "").toUpperCase();
-            let color = "bg-blue-50 text-blue-600 border-blue-100";
-            let icon = "clock";
+        function StatusLabel({ text }) {
+            const s = text.toUpperCase();
+            let colorClass = "bg-zinc-100 text-zinc-400 border-zinc-200";
+            if (["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(st => s.includes(st))) colorClass = "bg-emerald-50 text-emerald-600 border-emerald-100";
+            if (s.includes("ATRAS")) colorClass = "bg-rose-50 text-rose-600 border-rose-100";
+            if (["PRAZO", "PENDENTE", "ANDAMENTO", "ABERTO", "NO PRAZO"].some(st => s.includes(st))) colorClass = "bg-blue-50 text-blue-600 border-blue-100";
 
-            if (s.includes("CONCLU") || s.includes("OK") || s.includes("PAGO")) {
-                color = "bg-emerald-50 text-emerald-600 border-emerald-100 shadow-sm shadow-emerald-50";
-                icon = "check-circle";
-            } else if (s.includes("ATRAS")) {
-                color = "bg-rose-50 text-rose-600 border-rose-100 shadow-sm shadow-rose-50";
-                icon = "alert-circle";
-            }
-
-            return (
-                <div className={`px-6 py-3 rounded-2xl flex items-center gap-3 border font-black text-[11px] uppercase tracking-widest ${color}`}>
-                    <i data-lucide={icon} className="w-4 h-4"></i>
-                    {situacao}
-                </div>
-            );
+            return <span className={`status-badge border ${colorClass}`}>{text}</span>;
         }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
-
-        // Refresh dos Ícones Lucide
-        const refreshIcons = () => { if (window.lucide) window.lucide.createIcons(); };
-        setTimeout(refreshIcons, 500);
-        setInterval(refreshIcons, 5000);
+        
+        setInterval(() => { if(window.lucide) lucide.createIcons(); }, 1000);
     </script>
 </body>
 </html>
