@@ -198,7 +198,7 @@
                         </div>
                     </div>
 
-                    {/* KPIs - Grid de 5 colunas para acomodar o novo status */}
+                    {/* KPIs */}
                     <div className="grid grid-cols-5 gap-4">
                         <KpiCard 
                             label="Obrigações" 
@@ -257,7 +257,8 @@
                                                 </span>
                                             </div>
                                             <div className="col-span-3 text-right">
-                                                <p className="text-[10px] font-black text-zinc-400 uppercase mb-1.5 tracking-tighter">{item.responsavel}</p>
+                                                {/* Responsável com fonte maior e cor escura */}
+                                                <p className="text-[14px] font-black text-zinc-800 uppercase mb-1.5 tracking-tight">{item.responsavel}</p>
                                                 <StatusLabel text={item.situacao} />
                                             </div>
                                         </div>
@@ -304,7 +305,6 @@
             const s = text.toUpperCase();
             let colorClass = "bg-zinc-100 text-zinc-400 border-zinc-200";
             
-            // Ordem de prioridade na estilização
             if (["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(st => s.includes(st))) {
                 colorClass = "bg-emerald-50 text-emerald-600 border-emerald-200";
             } else if (s.includes("ATRAS")) {
