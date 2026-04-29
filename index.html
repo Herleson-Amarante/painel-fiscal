@@ -23,6 +23,7 @@
         .status-badge { padding: 6px 16px; border-radius: 14px; font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em; }
         .pulse-blue { animation: pulseBlue 2s infinite; }
         @keyframes pulseBlue { 0% { box-shadow: 0 0 0 0 rgba(0, 102, 204, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(0, 102, 204, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 102, 204, 0); } }
+        .tab-active { background: #0066cc !important; color: white !important; box-shadow: 0 4px 12px rgba(0, 102, 204, 0.2); }
     </style>
 </head>
 <body>
@@ -47,7 +48,7 @@
 
         function App() {
             const [data, setData] = useState([]);
-            const [activeTab, setActiveTab] = useState(CONFIG.COMPETENCIAS[3]); // Inicia em Abril
+            const [activeTab, setActiveTab] = useState(CONFIG.COMPETENCIAS[3]); 
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
             const [viewMode, setViewMode] = useState('CONCLUÍDO'); 
@@ -92,7 +93,7 @@
                     
                     const text = await response.text();
                     const rows = parseCSV(text);
-                    if (rows === null) throw new Error("Formato de ficheiro inválido.");
+                    if (rows === null) throw new Error("Erro no formato.");
                     
                     const headerIdx = rows.findIndex(r => r[0] && r[0].toLowerCase().includes('empresa'));
                     const dataRows = headerIdx !== -1 ? rows.slice(headerIdx + 1) : rows.slice(1);
@@ -127,6 +128,7 @@
                 return () => clearInterval(clock);
             }, [fetchData]);
 
+            // Métricas calculadas com segurança
             const metrics = useMemo(() => {
                 const total = data.length;
                 const concluidas = data.filter(i => ["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(s => i.situacao.includes(s))).length;
@@ -137,33 +139,51 @@
                 return { total, concluidas, noPrazo, vencendoHoje, atrasadas, eficiencia };
             }, [data]);
 
+            // Itens filtrados com reset de página seguro
             const filteredItems = useMemo(() => {
                 return data.filter(item => {
-                    const s = item.situacao;
+                    const s = item.situacao || "";
                     if (viewMode === 'CONCLUÍDO') return ["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(st => s.includes(st));
                     if (viewMode === 'NO PRAZO') return ["PRAZO", "PENDENTE", "ANDAMENTO", "ABERTO", "NO PRAZO"].some(st => s.includes(st) && !s.includes("HOJE") && !s.includes("VENCENDO"));
                     if (viewMode === 'VENCENDO HOJE') return ["HOJE", "VENCENDO"].some(st => s.includes(st)) && !["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(st => s.includes(st));
-                    return s.includes("ATRAS");
+                    if (viewMode === 'ATRASADO') return s.includes("ATRAS");
+                    return true;
                 });
             }, [data, viewMode]);
 
             const totalPages = Math.ceil(filteredItems.length / CONFIG.ITEMS_PER_PAGE) || 1;
 
+            // Garante que a página atual nunca exceda o limite após mudar o filtro
+            useEffect(() => {
+                if (currentPage >= totalPages) {
+                    setCurrentPage(0);
+                }
+            }, [filteredItems, totalPages, currentPage]);
+
+            // Rotação Automática com proteção
             useEffect(() => {
                 if (loading || error) return;
                 const interval = setInterval(() => {
                     setKey(k => k + 1);
                     setCurrentPage(prev => {
                         if (prev < totalPages - 1) return prev + 1;
+                        
+                        // Muda o modo de visualização quando a página acaba
                         setViewMode(curr => {
-                            const idx = (VIEW_MODES.indexOf(curr) + 1) % VIEW_MODES.length;
-                            return VIEW_MODES[idx];
+                            const nextIdx = (VIEW_MODES.indexOf(curr) + 1) % VIEW_MODES.length;
+                            return VIEW_MODES[nextIdx];
                         });
                         return 0;
                     });
                 }, CONFIG.ROTATION_INTERVAL);
                 return () => clearInterval(interval);
             }, [totalPages, loading, error]);
+
+            const handleModeChange = (mode) => {
+                setViewMode(mode);
+                setCurrentPage(0);
+                setKey(prev => prev + 1); // Reinicia animação da barra
+            };
 
             return (
                 <div className="h-screen p-10 flex flex-col space-y-8">
@@ -203,13 +223,13 @@
                         </div>
                     </div>
 
-                    {/* Resumo de Metas */}
+                    {/* KPIs - Agora clicáveis e com proteção de estado */}
                     <div className="grid grid-cols-5 gap-4">
                         <KpiCard label="Obrigações" value={metrics.total} icon="file-text" color="text-zinc-900" active={true} />
-                        <KpiCard label="Concluídas" value={metrics.concluidas} icon="check-circle" color="text-emerald-500" active={viewMode === 'CONCLUÍDO'} />
-                        <KpiCard label="No Prazo" value={metrics.noPrazo} icon="clock" color="text-blue-500" active={viewMode === 'NO PRAZO'} />
-                        <KpiCard label="Vencendo Hoje" value={metrics.vencendoHoje} icon="alert-circle" color="text-orange-500" active={viewMode === 'VENCENDO HOJE'} />
-                        <KpiCard label="Atrasadas" value={metrics.atrasadas} icon="flame" color="text-rose-500" active={viewMode === 'ATRASADO'} />
+                        <KpiCard label="Concluídas" value={metrics.concluidas} icon="check-circle" color="text-emerald-500" active={viewMode === 'CONCLUÍDO'} onClick={() => handleModeChange('CONCLUÍDO')} />
+                        <KpiCard label="No Prazo" value={metrics.noPrazo} icon="clock" color="text-blue-500" active={viewMode === 'NO PRAZO'} onClick={() => handleModeChange('NO PRAZO')} />
+                        <KpiCard label="Vencendo Hoje" value={metrics.vencendoHoje} icon="alert-circle" color="text-orange-500" active={viewMode === 'VENCENDO HOJE'} onClick={() => handleModeChange('VENCENDO HOJE')} />
+                        <KpiCard label="Atrasadas" value={metrics.atrasadas} icon="flame" color="text-rose-500" active={viewMode === 'ATRASADO'} onClick={() => handleModeChange('ATRASADO')} />
                     </div>
 
                     {/* Monitor de Atividades */}
@@ -222,12 +242,12 @@
                             <div className="flex items-center space-x-4">
                                 <span className={`flex h-2 w-2 rounded-full ${error ? 'bg-rose-500' : 'bg-blue-500 animate-pulse'}`}></span>
                                 <p className="text-[10px] font-black uppercase tracking-[0.3em]">
-                                    {error ? `ERRO NA SINCRONIZAÇÃO: ${error}` : loading ? 'A CARREGAR DADOS...' : `EXIBINDO: ${viewMode} • PÁGINA ${currentPage + 1}/${totalPages}`}
+                                    {error ? `ERRO: ${error}` : loading ? 'CARREGANDO...' : `FILTRO ATIVO: ${viewMode} • ${filteredItems.length} ITENS • PÁG ${currentPage + 1}/${totalPages}`}
                                 </p>
                             </div>
                             <button onClick={() => fetchData()} className="text-[9px] font-black uppercase text-zinc-500 hover:text-white transition-colors tracking-widest flex items-center space-x-2">
                                 <i data-lucide="refresh-cw" className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`}></i>
-                                <span>SINCRONIZAÇÃO ATIVA</span>
+                                <span>SINCRONIZAÇÃO EM TEMPO REAL</span>
                             </button>
                         </div>
 
@@ -235,8 +255,8 @@
                             {error ? (
                                 <div className="h-full flex flex-col items-center justify-center text-rose-500 space-y-4">
                                     <i data-lucide="cloud-off" className="w-12 h-12 opacity-50"></i>
-                                    <p className="font-black text-sm uppercase">Falha na ligação com a Base de Dados</p>
-                                    <button onClick={() => fetchData()} className="px-6 py-2 bg-zinc-900 text-white rounded-xl text-[10px] font-black uppercase">Reconectar</button>
+                                    <p className="font-black text-sm uppercase">Erro ao conectar com a base de dados</p>
+                                    <button onClick={() => fetchData()} className="px-6 py-2 bg-zinc-900 text-white rounded-xl text-[10px] font-black uppercase">Reiniciar</button>
                                 </div>
                             ) : loading ? (
                                 <div className="h-full flex flex-col items-center justify-center space-y-4">
@@ -266,9 +286,13 @@
                                     ))}
                                 </div>
                             ) : (
-                                <div className="h-full flex flex-col items-center justify-center text-zinc-100">
-                                    <i data-lucide="check-circle-2" className="w-16 h-16 mb-4 opacity-20"></i>
-                                    <p className="font-black uppercase text-[10px] tracking-[0.4em] text-zinc-300">Sem tarefas pendentes em "{viewMode}"</p>
+                                <div className="h-full flex flex-col items-center justify-center text-zinc-200">
+                                    <div className="w-20 h-20 bg-zinc-50 rounded-full flex items-center justify-center mb-4">
+                                        <i data-lucide="check-circle-2" className="w-10 h-10 text-zinc-200"></i>
+                                    </div>
+                                    <p className="font-black uppercase text-[10px] tracking-[0.4em] text-zinc-300 text-center">
+                                        Nenhuma obrigação encontrada em <br/> <span className="text-zinc-400">"{viewMode}"</span>
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -284,20 +308,24 @@
             );
         }
 
-        function KpiCard({ label, value, icon, color, active }) {
+        function KpiCard({ label, value, icon, color, active, onClick }) {
             return (
-                <div className={`premium-card p-6 flex flex-col space-y-1 transition-all duration-500 ${active ? 'ring-4 ring-blue-500/10 scale-105 shadow-2xl' : 'opacity-25'}`}>
+                <button 
+                    onClick={onClick}
+                    disabled={!onClick}
+                    className={`premium-card p-6 flex flex-col space-y-1 transition-all duration-500 text-left outline-none ${active ? 'ring-4 ring-blue-500/10 scale-105 shadow-2xl z-10' : 'opacity-40 hover:opacity-60'}`}
+                >
                     <div className="flex justify-between items-center mb-1">
                         <p className="text-[9px] font-black uppercase tracking-widest text-zinc-400 truncate mr-2">{label}</p>
                         <i data-lucide={icon} className={`w-4 h-4 ${active ? 'text-blue-500' : 'text-zinc-300'}`}></i>
                     </div>
                     <p className={`text-4xl font-black tracking-tighter truncate ${color}`}>{value}</p>
-                </div>
+                </button>
             );
         }
 
         function StatusLabel({ text }) {
-            const s = text.toUpperCase();
+            const s = (text || "").toUpperCase();
             let style = "bg-zinc-100 text-zinc-400 border-zinc-200";
             if (["CONCLU", "OK", "PAGO", "FEITO", "ENTREGUE"].some(st => s.includes(st))) style = "bg-emerald-50 text-emerald-600 border-emerald-200";
             else if (s.includes("ATRAS")) style = "bg-rose-50 text-rose-600 border-rose-200";
